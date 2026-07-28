@@ -401,6 +401,15 @@ body {
   line-height: 1.4;
 }
 
+.ctrl-note.warn {
+  color: var(--amber);
+}
+
+#estimate {
+  font-size: 12px;
+  color: var(--cyan);
+}
+
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;

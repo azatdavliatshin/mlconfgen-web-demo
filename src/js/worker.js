@@ -26,6 +26,10 @@ import * as ort from "onnxruntime-web";
 const BASE = new URL(import.meta.env.BASE_URL, self.location.origin).href;
 
 ort.env.wasm.wasmPaths = `${BASE}ort/`;
+// Single-threaded on purpose. Multi-threaded WASM needs SharedArrayBuffer and
+// therefore cross-origin isolation, which GitHub Pages does not provide — and
+// measured locally *with* isolation, 4 threads made session creation slower
+// (4220ms vs 3423ms), so there is nothing to gain by detecting it.
 ort.env.wasm.numThreads = 1;
 ort.env.logLevel = "error";
 

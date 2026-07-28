@@ -79,9 +79,20 @@ root, build with `BASE_PATH=/`.
   which runs automatically on `postinstall`, `dev`, and `build` — so ~32 MB of
   binaries stay out of git. `public/ort/` and `public/rdkit/` are gitignored;
   run `npm install` (or `npm run sync-assets`) to populate them.
-- **Speed.** Generation is CPU-bound WASM inference. Expect roughly a minute for
-  a handful of molecules at 30 steps; the first run additionally pays a one-off
-  ONNX graph compilation. Lower the step count for quicker feedback.
+- **Speed.** Generation is CPU-bound single-threaded WASM inference, and it is
+  not fast: measured locally at roughly **3.7 s per denoising step per sample**.
+  The defaults (3 samples × 20 steps) therefore take about a minute, and the
+  first run adds a one-off ~5 s ONNX graph compilation. The page shows a runtime
+  estimate as you move the sliders.
+
+  Multi-threading would need `SharedArrayBuffer` and thus cross-origin isolation,
+  which GitHub Pages does not provide. Measured locally *with* isolation, four
+  threads made session creation slower rather than faster, so the demo pins
+  `numThreads = 1`.
+
+- **Inference runs in a Web Worker**, so the page stays interactive while the
+  model runs. Doing this work on the main thread freezes the tab outright and
+  Chrome reports "Page Unresponsive".
 - **Requires `mlconfgen` ≥ 0.1.1**, which is the first release whose RDKit loader
   resolves correctly in a browser.
 

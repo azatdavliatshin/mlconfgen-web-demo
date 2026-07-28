@@ -112,15 +112,15 @@
 
       <div class="controls">
         <div class="ctrl">
-          <label>Samples <span class="val" id="v-samples">8</span></label>
-          <input type="range" id="c-samples" min="1" max="24" step="1" value="8" />
-          <p class="ctrl-note">Molecules generated per run.</p>
+          <label>Samples <span class="val" id="v-samples">3</span></label>
+          <input type="range" id="c-samples" min="1" max="12" step="1" value="3" />
+          <p class="ctrl-note">Molecules per run. Cost scales with this.</p>
         </div>
 
         <div class="ctrl">
-          <label>Diffusion Steps <span class="val" id="v-steps">100</span></label>
-          <input type="range" id="c-steps" min="10" max="200" step="10" value="100" />
-          <p class="ctrl-note">More steps → better quality, slower.</p>
+          <label>Diffusion Steps <span class="val" id="v-steps">20</span></label>
+          <input type="range" id="c-steps" min="10" max="100" step="5" value="20" />
+          <p class="ctrl-note">More steps → better quality, proportionally slower.</p>
         </div>
 
         <div class="ctrl">
@@ -166,6 +166,8 @@
           <p class="ctrl-note">Principal moments defining the target shape envelope.</p>
         </div>
       </div>
+
+      <p class="ctrl-note" id="estimate" style="margin-top:16px"></p>
 
       <div class="actions">
         <button class="btn" id="run" disabled>Generate</button>
