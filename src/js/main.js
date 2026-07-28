@@ -413,8 +413,12 @@ async function runAnimate(c) {
   const started = performance.now();
 
   // Frames arrive from the worker faster than they need to paint; keep only the
-  // newest and render it on the next animation frame, so a fast trajectory
-  // can't queue up hundreds of redundant WebGL updates.
+  // newest and render it once per animation frame, so a fast trajectory can't
+  // queue up hundreds of redundant WebGL updates.
+  //
+  // requestAnimationFrame alone is not enough: it is suspended in a background
+  // tab, so the card would never mount and the run would look like it produced
+  // nothing. Race it against a timer, which keeps firing when hidden.
   let queued = null;
   let scheduled = false;
 
@@ -437,14 +441,24 @@ async function runAnimate(c) {
     }
   };
 
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    let done = false;
+    const once = () => {
+      if (done) return;
+      done = true;
+      paint();
+    };
+    requestAnimationFrame(once);
+    setTimeout(once, 250);
+  };
+
   const result = await session.animate(c, {
     onStatus: (m) => setStatus(m),
     onFrame: ({ step, total, molecule }) => {
       queued = molecule;
-      if (!scheduled) {
-        scheduled = true;
-        requestAnimationFrame(paint);
-      }
+      schedule();
 
       const per = (performance.now() - started) / step;
       const left = Math.round(((total - step) * per) / 1000);
