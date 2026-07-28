@@ -57,6 +57,8 @@ export default defineConfig({
     exclude: ["onnxruntime-web"],
   },
   server: {
+    // Honor an externally assigned port (e.g. from a preview harness).
+    port: Number(process.env.PORT) || 5173,
     headers: {
       // Enables the multi-threaded WASM backend where the host allows it.
       "Cross-Origin-Opener-Policy": "same-origin",
