@@ -55,7 +55,7 @@ function setStatus(text, kind = "") {
 /* ── Presets ─────────────────────────────────────────────────────────── */
 
 function buildPresets() {
-  for (const p of [...PRESETS, CUSTOM]) {
+  for (const p of PRESETS) {
     const b = document.createElement("button");
     b.className = "preset";
     b.textContent = p.name;
@@ -69,31 +69,35 @@ function buildPresets() {
 
 function applyPreset(p) {
   activePreset = p;
-  if (p.moi) {
-    el.moi.forEach((input, i) => (input.value = p.moi[i]));
-    $("c-atoms").value = p.nAtoms;
-    syncRangeLabels();
-  }
-  el.presetLabel.textContent = p.name;
-  el.vMoi.textContent = p.id === "custom" ? "custom" : p.name.toLowerCase();
-  for (const b of el.presets.children) {
-    b.classList.toggle("on", b.dataset.id === p.id);
-  }
+  el.moi.forEach((input, i) => (input.value = p.moi[i]));
+  $("c-atoms").value = p.nAtoms;
+  $("c-variance").value = p.variance;
+  syncRangeLabels();
+  refreshPresetState();
   updateCode();
 }
 
-/** Editing the MOI fields by hand means we're no longer on a named preset. */
-function markCustom() {
-  if (activePreset.id === "custom") return;
+/**
+ * A preset owns the MOI triplet, the atom count and the variance. Touching any
+ * of them by hand puts us off the named preset, so nothing stays highlighted
+ * and the labels read "Custom" — there is no Custom button to click, the state
+ * is entirely derived from the controls.
+ */
+function isDrifted() {
   const p = activePreset;
-  const drifted = p.moi?.some((v, i) => Number(el.moi[i].value) !== v);
-  if (drifted) {
-    activePreset = CUSTOM;
-    el.presetLabel.textContent = CUSTOM.name;
-    el.vMoi.textContent = "custom";
-    for (const b of el.presets.children) {
-      b.classList.toggle("on", b.dataset.id === "custom");
-    }
+  return (
+    p.moi.some((v, i) => Number(el.moi[i].value) !== v) ||
+    Number($("c-atoms").value) !== p.nAtoms ||
+    Number($("c-variance").value) !== p.variance
+  );
+}
+
+function refreshPresetState() {
+  const custom = isDrifted();
+  el.presetLabel.textContent = custom ? CUSTOM.name : activePreset.name;
+  el.vMoi.textContent = custom ? "custom" : activePreset.name.toLowerCase();
+  for (const b of el.presets.children) {
+    b.classList.toggle("on", !custom && b.dataset.id === activePreset.id);
   }
 }
 
@@ -506,12 +510,13 @@ function init() {
   for (const [input] of RANGES) {
     $(input).addEventListener("input", () => {
       syncRangeLabels();
+      refreshPresetState();
       updateCode();
     });
   }
   for (const input of el.moi) {
     input.addEventListener("input", () => {
-      markCustom();
+      refreshPresetState();
       updateCode();
     });
   }

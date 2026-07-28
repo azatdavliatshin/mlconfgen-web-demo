@@ -6,51 +6,33 @@
  * each principal axis. Small, near-equal values read as compact and globular;
  * one large value against two small ones reads as elongated.
  *
- * The "kinase-like" triplet is the reference used in the package's own example;
- * the others are scaled to sketch out distinct regions of the same space.
+ * Each preset also carries the atom count and variance that produce good
+ * results for that shape (steps 20, samples 1, seed 42).
  */
 export const PRESETS = [
   {
-    id: "kinase",
-    name: "Kinase-like",
-    moi: [89.87, 210.78, 217.78],
+    id: "flat_disc",
+    name: "Flat Disc",
+    moi: [101.40107727050781, 102.84884643554688, 201.9473876953125],
     nAtoms: 20,
-    note: "Flat, fused-ring scaffold — the package's reference shape.",
+    variance: 1,
+    note: "Planar envelope — two equal light axes, one much heavier.",
   },
   {
-    id: "globular",
-    name: "Globular",
-    moi: [140.0, 152.0, 165.0],
-    nAtoms: 22,
-    note: "Near-spherical: three similar moments, densely packed.",
-  },
-  {
-    id: "rod",
-    name: "Elongated",
-    moi: [42.0, 330.0, 345.0],
-    nAtoms: 24,
+    id: "elongated_rod",
+    name: "Elongated Rod",
+    moi: [101.6028060913086, 1135.322509765625, 1167.136962890625],
+    nAtoms: 38,
+    variance: 0,
     note: "Linear, extended — one light axis, two heavy ones.",
   },
   {
-    id: "disc",
-    name: "Flat Disc",
-    moi: [175.0, 180.0, 340.0],
-    nAtoms: 21,
-    note: "Planar aromatic sheet — two equal axes, one much heavier.",
-  },
-  {
-    id: "compact",
-    name: "Fragment",
-    moi: [55.0, 95.0, 110.0],
-    nAtoms: 16,
-    note: "Small fragment-sized envelope for lead-like starting points.",
-  },
-  {
-    id: "large",
-    name: "Macrocycle",
-    moi: [260.0, 420.0, 470.0],
-    nAtoms: 34,
-    note: "Large, sprawling scaffold approaching the 39-atom ceiling.",
+    id: "v_shaped",
+    name: "V-Shaped",
+    moi: [89.87, 210.78, 217.78],
+    nAtoms: 23,
+    variance: 0,
+    note: "Bent scaffold — the package's reference triplet.",
   },
 ];
 

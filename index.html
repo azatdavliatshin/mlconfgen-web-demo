@@ -105,18 +105,20 @@
     <div class="panel-bd">
 
       <div class="ctrl" style="margin-bottom:18px">
-        <label>Shape Preset <span class="val" id="preset-label">Kinase-like</span></label>
+        <label>Shape Preset <span class="val" id="preset-label">Flat Disc</span></label>
         <div class="presets" id="presets"></div>
         <p class="ctrl-note">
           The shape constraint is a triplet of moment-of-inertia eigenvalues.
-          Presets approximate common ligand geometries; pick <em>Custom</em> to dial them in.
+          Presets approximate common ligand geometries. Each also sets the atom
+          count and variance below — edit any of them and the shape becomes
+          <em>Custom</em>.
         </p>
       </div>
 
       <div class="controls">
         <div class="ctrl">
-          <label>Samples <span class="val" id="v-samples">2</span></label>
-          <input type="range" id="c-samples" min="1" max="6" step="1" value="2" />
+          <label>Samples <span class="val" id="v-samples">1</span></label>
+          <input type="range" id="c-samples" min="1" max="6" step="1" value="1" />
           <p class="ctrl-note">
             Molecules per run — in Animate, one trajectory each. Runtime scales
             with this.
@@ -124,8 +126,8 @@
         </div>
 
         <div class="ctrl">
-          <label>Diffusion Steps <span class="val" id="v-steps">15</span></label>
-          <input type="range" id="c-steps" min="5" max="50" step="5" value="15" />
+          <label>Diffusion Steps <span class="val" id="v-steps">20</span></label>
+          <input type="range" id="c-steps" min="5" max="50" step="5" value="20" />
           <p class="ctrl-note">More steps → better quality, proportionally slower.</p>
         </div>
 
@@ -136,8 +138,8 @@
         </div>
 
         <div class="ctrl">
-          <label>Variance <span class="val" id="v-variance">2</span></label>
-          <input type="range" id="c-variance" min="0" max="6" step="1" value="2" />
+          <label>Variance <span class="val" id="v-variance">1</span></label>
+          <input type="range" id="c-variance" min="0" max="6" step="1" value="1" />
           <p class="ctrl-note">Allowed spread around the atom count.</p>
         </div>
 
@@ -165,9 +167,9 @@
         <div class="ctrl">
           <label>MOI Eigenvalues <span class="val" id="v-moi">custom</span></label>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-            <input type="text" id="c-moi0" value="89.87" inputmode="decimal" aria-label="MOI eigenvalue 1" />
-            <input type="text" id="c-moi1" value="210.78" inputmode="decimal" aria-label="MOI eigenvalue 2" />
-            <input type="text" id="c-moi2" value="217.78" inputmode="decimal" aria-label="MOI eigenvalue 3" />
+            <input type="text" id="c-moi0" value="101.40107727050781" inputmode="decimal" aria-label="MOI eigenvalue 1" />
+            <input type="text" id="c-moi1" value="102.84884643554688" inputmode="decimal" aria-label="MOI eigenvalue 2" />
+            <input type="text" id="c-moi2" value="201.9473876953125" inputmode="decimal" aria-label="MOI eigenvalue 3" />
           </div>
           <p class="ctrl-note">Principal moments defining the target shape envelope.</p>
         </div>
