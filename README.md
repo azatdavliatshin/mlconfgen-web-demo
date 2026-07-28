@@ -38,8 +38,16 @@ the package. Nothing leaves the tab.
   moment-of-inertia eigenvalues describing a target shape envelope. Presets cover
   several ligand geometries; you can also enter the values by hand.
 - **Both API paths** — `generateConformers()` for a batch of final molecules, and
-  `animateGeneration()` streaming one frame per denoising step so you can watch a
-  molecule condense out of noise.
+  `animateGeneration()` streaming one frame per denoising step so you can watch
+  molecules condense out of noise.
+
+  Animation is a single batched reverse-diffusion pass: every sample rides in
+  one tensor whose first dimension is `nSamples`, so all molecules advance the
+  same step together. Their trajectories are still chemically independent —
+  each starts from its own noise, and `edge_mask` blocks message passing
+  between molecules — they are simply marched in lockstep because one batched
+  forward pass is far cheaper than N separate ones. The synchronized display is
+  therefore accurate, not a simplification.
 - **Live 3D** — every result gets an interactive [3Dmol.js](https://3dmol.csb.pitt.edu/)
   viewer; molfiles can be copied or downloaded.
 - **A matching code snippet** — panel 04 mirrors your current settings as real
