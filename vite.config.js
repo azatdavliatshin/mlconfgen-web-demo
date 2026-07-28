@@ -47,6 +47,11 @@ export default defineConfig({
     target: "es2022",
     chunkSizeWarningLimit: 2000,
   },
+  // The inference worker is an ES module (it imports mlconfgen/onnxruntime-web);
+  // the default IIFE format can't code-split those dependencies.
+  worker: {
+    format: "es",
+  },
   optimizeDeps: {
     // Emscripten/UMD builds Vite should not try to pre-bundle as ESM.
     exclude: ["onnxruntime-web"],

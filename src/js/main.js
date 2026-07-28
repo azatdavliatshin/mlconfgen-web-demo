@@ -26,7 +26,6 @@ const session = new GeneratorSession();
 const pool = new ViewerPool();
 let activePreset = PRESETS[0];
 let running = false;
-let abort = false;
 
 /* ── Config ──────────────────────────────────────────────────────────── */
 
@@ -235,21 +234,19 @@ function refreshReady() {
     setStatus("Weights loaded — ready to generate.", "ok");
   } else {
     el.run.disabled = true;
-    const need = !session.egnnBytes ? "EGNN" : "AdjMatSeer";
+    const need = !session.loaded.egnn ? "EGNN" : "AdjMatSeer";
     setStatus(`Waiting for ${need} weights…`);
   }
 }
 
 /* ── Rendering ───────────────────────────────────────────────────────── */
 
-function molStats(mol) {
-  return { atoms: mol.nAtoms, bonds: mol.bonds?.length ?? 0 };
-}
-
+/** `mol` is the worker's plain payload: { molBlock, nAtoms, nBonds }. */
 function makeCard(index, mol, { label } = {}) {
   const card = document.createElement("article");
   card.className = "card";
-  const { atoms, bonds } = molStats(mol);
+  const atoms = mol.nAtoms;
+  const bonds = mol.nBonds;
 
   card.innerHTML = `
     <div class="card-hd">
@@ -263,7 +260,7 @@ function makeCard(index, mol, { label } = {}) {
       <button class="mini" data-act="dl">Download</button>
     </div>`;
 
-  const block = mol.toMolBlock();
+  const block = mol.molBlock;
   const viewer = pool.create(card.querySelector(".viewer"), { spin: true });
   viewer.setMolecule(block);
 
@@ -313,7 +310,6 @@ function resetOutput() {
 async function run() {
   if (running) return;
   running = true;
-  abort = false;
   el.run.disabled = true;
   el.run.textContent = "Working…";
   el.stop.hidden = false;
@@ -344,9 +340,16 @@ async function run() {
 
 async function runGenerate(c) {
   setProgress(0, 1, "Initialising…");
-  const { molecules, elapsedMs } = await session.generate(c, (m) =>
-    setStatus(m),
-  );
+  const result = await session.generate(c, (m) => setStatus(m));
+
+  if (result.aborted) {
+    setStatus("Aborted — the worker was restarted.", "err");
+    el.empty.hidden = false;
+    el.empty.textContent = "Run aborted.";
+    return;
+  }
+
+  const { molecules, requested, elapsedMs } = result;
 
   if (!molecules.length) {
     el.empty.hidden = false;
@@ -369,14 +372,14 @@ async function runGenerate(c) {
 
   showStats([
     [molecules.length, "valid"],
-    [`${c.nSamples}`, "requested"],
+    [`${requested}`, "requested"],
     [avgAtoms, "avg atoms"],
     [`${(elapsedMs / 1000).toFixed(1)}s`, "elapsed"],
     [c.diffusionSteps, "steps"],
   ]);
 
   setStatus(
-    `${molecules.length}/${c.nSamples} valid in ${(elapsedMs / 1000).toFixed(1)}s.`,
+    `${molecules.length}/${requested} valid in ${(elapsedMs / 1000).toFixed(1)}s.`,
     "ok",
   );
 }
@@ -387,54 +390,66 @@ async function runAnimate(c) {
   let card = null;
   let viewer = null;
   const started = performance.now();
-  let lastFrame = null;
-  let announced = false;
 
-  for await (const frame of session.animate(c, (m) => setStatus(m))) {
-    if (!announced) {
-      setStatus("Streaming denoising trajectory…");
-      announced = true;
-    }
-    if (abort) {
-      setStatus("Aborted.", "err");
-      return;
-    }
-    const mol = frame.molecules[0];
-    if (!mol) continue;
-    lastFrame = frame;
+  // Frames arrive from the worker faster than they need to paint; keep only the
+  // newest and render it on the next animation frame, so a fast trajectory
+  // can't queue up hundreds of redundant WebGL updates.
+  let queued = null;
+  let scheduled = false;
+
+  const paint = () => {
+    scheduled = false;
+    const mol = queued;
+    if (!mol) return;
+    queued = null;
 
     if (!card) {
       const made = makeCard(0, mol, { label: "DIFFUSION" });
       card = made.card;
       viewer = made.viewer;
       el.grid.appendChild(card);
-      requestAnimationFrame(() => viewer.resize());
+      viewer.resize();
     } else {
-      viewer.updateMolecule(mol.toMolBlock());
+      viewer.updateMolecule(mol.molBlock);
       card.querySelector(".card-meta").textContent =
-        `${mol.nAtoms} atoms · ${mol.bonds?.length ?? 0} bonds`;
+        `${mol.nAtoms} atoms · ${mol.nBonds} bonds`;
     }
+  };
 
-    const per = (performance.now() - started) / frame.step;
-    const left = Math.round(((frame.total - frame.step) * per) / 1000);
-    setProgress(
-      frame.step,
-      frame.total,
-      `step ${frame.step} / ${frame.total}${left > 0 ? ` · ~${left}s left` : ""}`,
-    );
-    // Yield so the frame paints. setTimeout rather than requestAnimationFrame:
-    // rAF is throttled (or never fires) in a background tab, which would stall
-    // the whole trajectory instead of just slowing the animation down.
-    await new Promise((r) => setTimeout(r, 0));
+  const result = await session.animate(c, {
+    onStatus: (m) => setStatus(m),
+    onFrame: ({ step, total, molecule }) => {
+      queued = molecule;
+      if (!scheduled) {
+        scheduled = true;
+        requestAnimationFrame(paint);
+      }
+
+      const per = (performance.now() - started) / step;
+      const left = Math.round(((total - step) * per) / 1000);
+      setProgress(
+        step,
+        total,
+        `step ${step} / ${total}${left > 0 ? ` · ~${left}s left` : ""}`,
+      );
+    },
+  });
+
+  paint(); // ensure the final frame is shown even if a rAF was still pending
+
+  const secs = (result.elapsedMs / 1000).toFixed(1);
+  if (result.aborted) {
+    setStatus(`Aborted after ${secs}s.`, "err");
+    return;
   }
 
-  const secs = ((performance.now() - started) / 1000).toFixed(1);
   showStats([
-    [lastFrame?.total ?? c.diffusionSteps, "steps"],
-    [lastFrame?.molecules[0]?.nAtoms ?? "—", "atoms"],
+    [result.total, "steps"],
+    [result.molecule?.nAtoms ?? "—", "atoms"],
+    [result.molecule?.nBonds ?? "—", "bonds"],
     [`${secs}s`, "elapsed"],
   ]);
-  setStatus(`Trajectory complete — ${lastFrame?.total ?? 0} steps in ${secs}s.`, "ok");
+  setStatus(`Trajectory complete — ${result.total} steps in ${secs}s.`, "ok");
 }
 
 /* ── Wire-up ─────────────────────────────────────────────────────────── */
@@ -467,8 +482,13 @@ function init() {
 
   el.run.addEventListener("click", run);
   el.stop.addEventListener("click", () => {
-    abort = true;
-    setStatus("Aborting after current step…");
+    // Animate stops at the next step boundary; generate can only be stopped by
+    // restarting the worker, which throws away the compiled graphs.
+    const cooperative = config().mode === "animate";
+    setStatus(
+      cooperative ? "Stopping after this step…" : "Restarting worker to stop…",
+    );
+    session.abort();
   });
 
   el.copyCode.addEventListener("click", () => {
