@@ -74,19 +74,16 @@ body {
   opacity: 0.5;
 }
 
-.sun {
+.flask {
   position: absolute;
   left: 50%;
-  top: 26%;
-  width: min(34vw, 330px);
-  aspect-ratio: 1;
+  top: 34%;
+  width: min(28vw, 260px, 34vh);
+  aspect-ratio: 650 / 1023;
   transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: linear-gradient(180deg, var(--amber) 0%, var(--magenta) 55%, var(--purple) 100%);
-  filter: blur(0.4px);
+  background: url("/logo-tinted.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 22px rgba(255, 45, 149, 0.35));
   opacity: 0.42;
-  -webkit-mask-image: repeating-linear-gradient(180deg, #000 0 8px, transparent 8px 13px);
-  mask-image: repeating-linear-gradient(180deg, #000 0 8px, transparent 8px 13px);
   animation: sun-drift 14s ease-in-out infinite alternate;
 }
 
@@ -119,7 +116,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sun, .horizon { animation: none; }
+  .flask, .horizon { animation: none; }
 }
 
 /* ── Layout ───────────────────────────────────────────────────────────── */
