@@ -80,10 +80,12 @@ root, build with `BASE_PATH=/`.
   binaries stay out of git. `public/ort/` and `public/rdkit/` are gitignored;
   run `npm install` (or `npm run sync-assets`) to populate them.
 - **Speed.** Generation is CPU-bound single-threaded WASM inference, and it is
-  not fast: measured locally at roughly **3.7 s per denoising step per sample**.
-  The defaults (3 samples × 20 steps) therefore take about a minute, and the
-  first run adds a one-off ~5 s ONNX graph compilation. The page shows a runtime
-  estimate as you move the sliders.
+  not fast: measured locally at roughly **2.15 s per denoising step per sample**
+  (1 sample x 10 steps ran in 19 s warm, 23.5 s cold). The defaults
+  (2 samples × 15 steps) take about a minute — a measured run came in at 63.6 s
+  against a 65 s estimate. The first run adds a one-off ~4 s ONNX graph
+  compilation. The page shows a live runtime estimate as you move the sliders,
+  and the slider ranges are capped so the worst case stays around ten minutes.
 
   Multi-threading would need `SharedArrayBuffer` and thus cross-origin isolation,
   which GitHub Pages does not provide. Measured locally *with* isolation, four

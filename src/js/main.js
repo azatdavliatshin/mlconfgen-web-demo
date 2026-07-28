@@ -113,18 +113,17 @@ function syncRangeLabels() {
   updateEstimate();
 }
 
-// Measured locally under single-threaded WASM: a 2-sample trace averaged ~7.4 s
-// per denoising step, and 3 samples x 20 steps took ~1.5 min. The batch is
-// denoised in one pass, so cost is dominated by the step count and grows only
-// weakly with the sample count. Heavily machine-dependent and deliberately
-// rough — the point is to stop someone unknowingly queuing a ten-minute run.
-const SECONDS_PER_STEP = 2.6;
+// Fitted to local measurements under single-threaded WASM: 1x10 = 19 s warm,
+// 2x10 ≈ 74 s, 3x20 = 129 s. Cost is close to linear in (steps x samples) at
+// roughly 2.15 s each; a cold run adds ~4 s of graph compilation. Heavily
+// machine-dependent and deliberately rough — the point is to stop someone
+// unknowingly queuing a forty-minute run.
+const SECONDS_PER_STEP_SAMPLE = 2.15;
 
 function updateEstimate() {
   const c = config();
   const samples = c.mode === "animate" ? 1 : c.nSamples;
-  // Sub-linear in batch size: one forward pass covers the whole batch.
-  const secs = c.diffusionSteps * SECONDS_PER_STEP * Math.sqrt(samples);
+  const secs = c.diffusionSteps * samples * SECONDS_PER_STEP_SAMPLE;
   const text =
     secs < 90
       ? `~${Math.round(secs)}s`
