@@ -148,26 +148,27 @@ async function runAnimate(config) {
   status("Streaming denoising trajectory…");
   const started = performance.now();
   let total = config.diffusionSteps;
-  let last = null;
+  let last = [];
 
+  // The whole batch is denoised together, so every sample has a trajectory —
+  // stream them all and let the UI show one viewer per molecule.
   for await (const frame of gen.animateGeneration({
     referenceContext: config.moi,
     nAtoms: config.nAtoms,
-    nSamples: 1,
+    nSamples: config.nSamples,
     variance: config.variance,
     predictBonds: config.bondsEveryFrame ? "always" : "last",
     filterInvalid: false,
   })) {
     if (aborted) break;
-    const mol = frame.molecules[0];
-    if (!mol) continue;
+    if (!frame.molecules.length) continue;
     total = frame.total;
-    last = mol;
+    last = frame.molecules;
     post({
       type: "frame",
       step: frame.step,
       total: frame.total,
-      molecule: serialize(mol),
+      molecules: frame.molecules.map(serialize),
     });
   }
 
@@ -176,7 +177,7 @@ async function runAnimate(config) {
     animated: true,
     aborted,
     total,
-    molecule: last ? serialize(last) : null,
+    molecules: last.map(serialize),
     elapsedMs: performance.now() - started,
   });
 }

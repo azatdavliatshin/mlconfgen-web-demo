@@ -35,9 +35,7 @@ function config() {
   return {
     moi: el.moi.map((i) => Number(i.value) || 0),
     nAtoms: Number($("c-atoms").value),
-    // The animation only ever displays one trajectory, so denoise a single
-    // molecule there — batching would multiply the per-step cost for nothing.
-    nSamples: raw === "generate" ? Number($("c-samples").value) : 1,
+    nSamples: Number($("c-samples").value),
     variance: Number($("c-variance").value),
     diffusionSteps: Number($("c-steps").value),
     seed: Number($("c-seed").value) || 0,
@@ -122,8 +120,7 @@ const SECONDS_PER_STEP_SAMPLE = 2.15;
 
 function updateEstimate() {
   const c = config();
-  const samples = c.mode === "animate" ? 1 : c.nSamples;
-  const secs = c.diffusionSteps * samples * SECONDS_PER_STEP_SAMPLE;
+  const secs = c.diffusionSteps * c.nSamples * SECONDS_PER_STEP_SAMPLE;
   const text =
     secs < 90
       ? `~${Math.round(secs)}s`
@@ -143,7 +140,7 @@ function updateCode() {
   variance: ${c.variance},
   predictBonds: ${c.bondsEveryFrame ? '"always"' : '"last"'},
 })) {
-  render(frame.molecules[0], frame.step, frame.total);
+  render(frame.molecules, frame.step, frame.total);
 }`
       : `const mols = await gen.generateConformers({
   referenceContext: [${c.moi.join(", ")}],
@@ -408,8 +405,9 @@ async function runGenerate(c) {
 async function runAnimate(c) {
   setProgress(0, c.diffusionSteps, "Initialising…");
 
-  let card = null;
-  let viewer = null;
+  // One card per sample in the batch, mounted on the first frame and then fed
+  // in place for the rest of the trajectory.
+  const cards = [];
   const started = performance.now();
 
   // Frames arrive from the worker faster than they need to paint; keep only the
@@ -417,28 +415,31 @@ async function runAnimate(c) {
   // queue up hundreds of redundant WebGL updates.
   //
   // requestAnimationFrame alone is not enough: it is suspended in a background
-  // tab, so the card would never mount and the run would look like it produced
+  // tab, so the cards would never mount and the run would look like it produced
   // nothing. Race it against a timer, which keeps firing when hidden.
   let queued = null;
   let scheduled = false;
 
   const paint = () => {
     scheduled = false;
-    const mol = queued;
-    if (!mol) return;
+    const mols = queued;
+    if (!mols) return;
     queued = null;
 
-    if (!card) {
-      const made = makeCard(0, mol, { label: "DIFFUSION" });
-      card = made.card;
-      viewer = made.viewer;
-      el.grid.appendChild(card);
-      viewer.resize();
-    } else {
-      viewer.updateMolecule(mol.molBlock);
-      card.querySelector(".card-meta").textContent =
-        `${mol.nAtoms} atoms · ${mol.nBonds} bonds`;
-    }
+    mols.forEach((mol, i) => {
+      if (!cards[i]) {
+        const made = makeCard(i, mol, {
+          label: mols.length > 1 ? `TRAJECTORY ${i + 1}` : "DIFFUSION",
+        });
+        cards[i] = made;
+        el.grid.appendChild(made.card);
+        made.viewer.resize();
+      } else {
+        cards[i].viewer.updateMolecule(mol.molBlock);
+        cards[i].card.querySelector(".card-meta").textContent =
+          `${mol.nAtoms} atoms · ${mol.nBonds} bonds`;
+      }
+    });
   };
 
   const schedule = () => {
@@ -456,8 +457,8 @@ async function runAnimate(c) {
 
   const result = await session.animate(c, {
     onStatus: (m) => setStatus(m),
-    onFrame: ({ step, total, molecule }) => {
-      queued = molecule;
+    onFrame: ({ step, total, molecules }) => {
+      queued = molecules;
       schedule();
 
       const per = (performance.now() - started) / step;
@@ -478,13 +479,21 @@ async function runAnimate(c) {
     return;
   }
 
+  const finals = result.molecules ?? [];
+  const avgAtoms = finals.length
+    ? (finals.reduce((s, m) => s + m.nAtoms, 0) / finals.length).toFixed(1)
+    : "—";
+
   showStats([
+    [finals.length || "—", "trajectories"],
     [result.total, "steps"],
-    [result.molecule?.nAtoms ?? "—", "atoms"],
-    [result.molecule?.nBonds ?? "—", "bonds"],
+    [avgAtoms, "avg atoms"],
     [`${secs}s`, "elapsed"],
   ]);
-  setStatus(`Trajectory complete — ${result.total} steps in ${secs}s.`, "ok");
+  setStatus(
+    `${finals.length} ${finals.length === 1 ? "trajectory" : "trajectories"} complete — ${result.total} steps in ${secs}s.`,
+    "ok",
+  );
 }
 
 /* ── Wire-up ─────────────────────────────────────────────────────────── */
