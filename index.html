@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MLCONFGEN // browser playground</title>
+<meta name="description" content="Run mlconfgen entirely in your browser — spatially-aware molecule generation via equivariant diffusion, with a live 3D viewer." />
+<link rel="stylesheet" href="/src/css/style.css" />
+</head>
+<body>
+
+<div class="backdrop" aria-hidden="true">
+  <div class="sun"></div>
+  <div class="horizon"></div>
+</div>
+
+<div class="shell">
+
+  <header class="masthead">
+    <h1 class="logo"><span class="bracket">&lt;</span>MLCONFGEN<span class="bracket">/&gt;</span></h1>
+    <p class="tagline">Equivariant Diffusion · In Your Browser</p>
+    <p class="subline">
+      Generate 3D molecular conformers from a shape constraint — no server, no upload.
+      The model runs entirely client-side on your own machine via ONNX Runtime Web.
+    </p>
+    <div class="badges">
+      <a class="badge" href="https://www.npmjs.com/package/mlconfgen" target="_blank" rel="noopener">npm: mlconfgen</a>
+      <a class="badge" href="https://github.com/Membrizard/ml_conformer_generator" target="_blank" rel="noopener">GitHub</a>
+      <a class="badge" href="https://huggingface.co/Membrizard/ml_conformer_generator" target="_blank" rel="noopener">Weights</a>
+      <a class="badge" href="https://doi.org/10.1039/D5DD00318K" target="_blank" rel="noopener">Paper · D5DD00318K</a>
+    </div>
+  </header>
+
+  <!-- ── 1. Weights ───────────────────────────────────────────────── -->
+  <section class="panel">
+    <div class="panel-hd">
+      <span class="idx">01</span>
+      <h2>Load Model Weights</h2>
+    </div>
+    <div class="panel-bd">
+
+      <p class="notice">
+        <strong>Why you supply the weights.</strong>
+        The trained weights are licensed <strong>CC BY-NC-ND 4.0</strong> and are not
+        redistributed by this demo or published to npm. You download them once from
+        Hugging Face and load them from your own disk. They are read directly into
+        this browser tab — nothing is uploaded anywhere.
+      </p>
+
+      <ol class="steps">
+        <li class="step">
+          <h3>Open the model repo</h3>
+          <p>
+            Go to
+            <a href="https://huggingface.co/Membrizard/ml_conformer_generator" target="_blank" rel="noopener">huggingface.co/Membrizard/ml_conformer_generator</a>
+            and accept the license terms to enable downloads.
+          </p>
+        </li>
+        <li class="step">
+          <h3>Download two ONNX files</h3>
+          <p>
+            <code>egnn_chembl_15_39.onnx</code> (94&nbsp;MB) and
+            <code>adj_mat_seer_chembl_15_39.onnx</code> (83&nbsp;MB).
+            Grab both from the <em>Files</em> tab.
+          </p>
+        </li>
+        <li class="step">
+          <h3>Drop them below</h3>
+          <p>
+            Drag each file onto its slot, or click to browse. They stay on your
+            machine — loading is instant and works offline afterwards.
+          </p>
+        </li>
+      </ol>
+
+      <div class="drops">
+        <div class="drop" id="drop-egnn" tabindex="0" role="button"
+             aria-label="Load EGNN diffusion model weights">
+          <div class="drop-name">EGNN · Diffusion</div>
+          <div class="drop-file" id="file-egnn">egnn_chembl_15_39.onnx</div>
+          <div class="drop-hint">drop file or click · ~94 MB</div>
+          <input type="file" accept=".onnx" hidden id="input-egnn" />
+        </div>
+
+        <div class="drop" id="drop-adj" tabindex="0" role="button"
+             aria-label="Load AdjMatSeer bond prediction weights">
+          <div class="drop-name">AdjMatSeer · Bonds</div>
+          <div class="drop-file" id="file-adj">adj_mat_seer_chembl_15_39.onnx</div>
+          <div class="drop-hint">drop file or click · ~83 MB</div>
+          <input type="file" accept=".onnx" hidden id="input-adj" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 2. Configure ─────────────────────────────────────────────── -->
+  <section class="panel">
+    <div class="panel-hd">
+      <span class="idx">02</span>
+      <h2>Configure Generation</h2>
+    </div>
+    <div class="panel-bd">
+
+      <div class="ctrl" style="margin-bottom:18px">
+        <label>Shape Preset <span class="val" id="preset-label">Kinase-like</span></label>
+        <div class="presets" id="presets"></div>
+        <p class="ctrl-note">
+          The shape constraint is a triplet of moment-of-inertia eigenvalues.
+          Presets approximate common ligand geometries; pick <em>Custom</em> to dial them in.
+        </p>
+      </div>
+
+      <div class="controls">
+        <div class="ctrl">
+          <label>Samples <span class="val" id="v-samples">8</span></label>
+          <input type="range" id="c-samples" min="1" max="24" step="1" value="8" />
+          <p class="ctrl-note">Molecules generated per run.</p>
+        </div>
+
+        <div class="ctrl">
+          <label>Diffusion Steps <span class="val" id="v-steps">100</span></label>
+          <input type="range" id="c-steps" min="10" max="200" step="10" value="100" />
+          <p class="ctrl-note">More steps → better quality, slower.</p>
+        </div>
+
+        <div class="ctrl">
+          <label>Atom Count <span class="val" id="v-atoms">20</span></label>
+          <input type="range" id="c-atoms" min="15" max="39" step="1" value="20" />
+          <p class="ctrl-note">Heavy atoms per molecule (15–39).</p>
+        </div>
+
+        <div class="ctrl">
+          <label>Variance <span class="val" id="v-variance">2</span></label>
+          <input type="range" id="c-variance" min="0" max="6" step="1" value="2" />
+          <p class="ctrl-note">Allowed spread around the atom count.</p>
+        </div>
+
+        <div class="ctrl">
+          <label>Seed <span class="val" id="v-seed">fixed</span></label>
+          <input type="text" id="c-seed" value="42" inputmode="numeric" />
+          <p class="ctrl-note">Same seed → identical output.</p>
+        </div>
+
+        <div class="ctrl">
+          <label>Mode</label>
+          <select id="c-mode">
+            <option value="generate">Generate — final molecules</option>
+            <option value="animate">Animate — watch diffusion</option>
+            <option value="animate-bonds">Animate + live bonds (slow)</option>
+          </select>
+          <p class="ctrl-note">
+            Animate streams every denoising step. “Live bonds” re-runs bond
+            prediction each frame — much slower, but you see connectivity form.
+          </p>
+        </div>
+      </div>
+
+      <div class="controls" style="margin-top:16px">
+        <div class="ctrl">
+          <label>MOI Eigenvalues <span class="val" id="v-moi">custom</span></label>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+            <input type="text" id="c-moi0" value="89.87" inputmode="decimal" aria-label="MOI eigenvalue 1" />
+            <input type="text" id="c-moi1" value="210.78" inputmode="decimal" aria-label="MOI eigenvalue 2" />
+            <input type="text" id="c-moi2" value="217.78" inputmode="decimal" aria-label="MOI eigenvalue 3" />
+          </div>
+          <p class="ctrl-note">Principal moments defining the target shape envelope.</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="run" disabled>Generate</button>
+        <button class="btn btn-ghost" id="stop" hidden>Abort</button>
+        <span class="status" id="status">Awaiting model weights…</span>
+      </div>
+
+      <div class="progress" id="progress" hidden>
+        <div class="progress-bar" id="progress-bar"></div>
+        <div class="progress-txt" id="progress-txt"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 3. Results ───────────────────────────────────────────────── -->
+  <section class="panel">
+    <div class="panel-hd">
+      <span class="idx">03</span>
+      <h2>Output</h2>
+    </div>
+    <div class="panel-bd">
+      <div class="stats" id="stats" hidden></div>
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="empty">
+        No molecules yet — load the weights above and hit <strong>Generate</strong>.
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 4. Code ──────────────────────────────────────────────────── -->
+  <section class="panel">
+    <div class="panel-hd">
+      <span class="idx">04</span>
+      <h2>The Same Run, In Code</h2>
+    </div>
+    <div class="panel-bd">
+      <p style="margin-top:0;color:var(--ink-dim);font-size:13px">
+        This snippet reproduces your current settings. It is the real package API —
+        the demo calls exactly this.
+      </p>
+      <pre class="code" id="code"></pre>
+      <div style="margin-top:12px">
+        <button class="mini" id="copy-code">Copy snippet</button>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p>
+      <a href="https://www.npmjs.com/package/mlconfgen" target="_blank" rel="noopener">mlconfgen</a> ·
+      <a href="https://github.com/Membrizard/ml_conformer_generator" target="_blank" rel="noopener">source</a> ·
+      Apache-2.0 code, CC BY-NC-ND weights
+    </p>
+    <p>
+      Sapegin, Bakharev, Krupenya, Gafurov, Pildish &amp; Bear —
+      <a href="https://doi.org/10.1039/D5DD00318K" target="_blank" rel="noopener">Digital Discovery, 2025</a>
+    </p>
+  </footer>
+
+</div>
+
+<script type="module" src="/src/js/main.js"></script>
+</body>
+</html>

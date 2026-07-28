@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# Model weights are CC BY-NC-ND — never commit them.
+*.onnx
+public/_testweights/
+
+# Runtime WASM copied out of node_modules by scripts/sync-runtime-assets.js.
+public/ort/
+public/rdkit/

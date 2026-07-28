@@ -1,0 +1,22 @@
+{
+  "name": "mlconfgen-web-demo",
+  "version": "1.0.0",
+  "description": "Browser playground for mlconfgen — spatially-aware molecule generation via equivariant diffusion, running fully client-side.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "sync-assets": "node scripts/sync-runtime-assets.js",
+    "postinstall": "npm run sync-assets",
+    "dev": "npm run sync-assets && vite",
+    "build": "npm run sync-assets && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "3dmol": "^2.5.2",
+    "mlconfgen": "^0.1.1",
+    "onnxruntime-web": "^1.27.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.5"
+  }
+}
