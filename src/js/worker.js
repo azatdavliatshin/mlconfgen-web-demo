@@ -234,6 +234,13 @@ async function runAnimate(config) {
       total: frame.total,
       molecules: frame.molecules.map(serialize),
     });
+
+    // The generator moves from one step to the next without returning to the
+    // event loop, so an "abort" message would wait for the whole trajectory.
+    // A zero-delay timer lets it in, and the check stops before the next step
+    // is computed rather than after it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (aborted) break;
   }
 
   post({
