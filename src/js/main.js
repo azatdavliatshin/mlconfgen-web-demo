@@ -1,6 +1,7 @@
 import { GeneratorSession, readWeights } from "./generator.js";
 import { CUSTOM, PRESETS } from "./presets.js";
 import { ViewerPool } from "./viewer.js";
+import { DEFAULT_SET, KINDS, mb, setBytes, WEIGHT_SETS } from "./weights.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,9 +22,16 @@ const el = {
   moi: ["c-moi0", "c-moi1", "c-moi2"].map($),
   vMoi: $("v-moi"),
   estimate: $("estimate"),
+  srcHubBtn: $("src-hub-btn"),
+  srcLocalBtn: $("src-local-btn"),
+  srcHub: $("src-hub"),
+  srcLocal: $("src-local"),
+  hubFiles: $("hub-files"),
+  hubLoad: $("hub-load"),
 };
 
-const session = new GeneratorSession();
+const session = new GeneratorSession({ onWeights: onHubEvent });
+let hubSet = WEIGHT_SETS[DEFAULT_SET];
 const pool = new ViewerPool();
 let activePreset = PRESETS[0];
 let running = false;
@@ -204,6 +212,95 @@ function highlight(src) {
 
 /* ── Weight loading ──────────────────────────────────────────────────── */
 
+function showSource(source) {
+  const hub = source === "hub";
+  el.srcHub.hidden = !hub;
+  el.srcLocal.hidden = hub;
+  el.srcHubBtn.classList.toggle("on", hub);
+  el.srcLocalBtn.classList.toggle("on", !hub);
+  el.srcHubBtn.setAttribute("aria-pressed", String(hub));
+  el.srcLocalBtn.setAttribute("aria-pressed", String(!hub));
+}
+
+/** One row per file of the selected set: name, size, progress bar. */
+function renderHubFiles() {
+  el.hubFiles.innerHTML = "";
+  for (const kind of KINDS) {
+    const { file, bytes } = hubSet[kind];
+    const row = document.createElement("div");
+    row.className = "dl";
+    row.dataset.file = file;
+    row.innerHTML = `
+      <div class="dl-hd">
+        <span class="dl-name">${file}</span>
+        <span class="dl-state">${mb(bytes)} MB</span>
+      </div>
+      <div class="dl-bar"><div></div></div>`;
+    el.hubFiles.appendChild(row);
+  }
+  el.hubLoad.textContent = `Load ${hubSet.name} weights · ${mb(setBytes(hubSet))} MB`;
+}
+
+function hubRow(file) {
+  return [...el.hubFiles.children].find((r) => r.dataset.file === file);
+}
+
+function setRow(file, fraction, text, done = false) {
+  const row = hubRow(file);
+  if (!row) return;
+  row.querySelector(".dl-bar > div").style.width = `${Math.round(fraction * 100)}%`;
+  row.querySelector(".dl-state").textContent = text;
+  row.classList.toggle("done", done);
+}
+
+function setLoading(on) {
+  el.hubLoad.disabled = on;
+  el.srcLocalBtn.disabled = on;
+  el.srcHubBtn.disabled = on;
+}
+
+async function loadHub() {
+  renderHubFiles();
+  setLoading(true);
+  refreshReady();
+  setStatus(`Loading ${hubSet.name} weights — from the browser cache if they are there…`);
+  // Outcome and errors are reported through onHubEvent.
+  await session.loadFromHub(hubSet.id).catch(() => {});
+}
+
+/**
+ * Hub events from the session, for a load the user started or for the
+ * automatic reload after an abort restarted the worker.
+ */
+function onHubEvent(evt) {
+  if (evt.type === "progress") {
+    const { file, loaded, total } = evt;
+    const of = total ? ` / ${mb(total)} MB` : " MB";
+    setRow(file, total ? loaded / total : 0, `${mb(loaded)}${of}`);
+    if (!running) setStatus(`Downloading ${file} from Hugging Face…`);
+    return;
+  }
+
+  setLoading(false);
+
+  if (evt.type === "loaded") {
+    for (const f of evt.files) {
+      setRow(f.file, 1, `${mb(f.bytes)} MB · ${f.cached ? "from cache" : "downloaded"}`, true);
+    }
+    const fromCache = evt.files.every((f) => f.cached);
+    const how = fromCache ? "from the browser cache" : "downloaded from Hugging Face";
+    const what = evt.restored ? "Weights reloaded into a fresh worker" : `${WEIGHT_SETS[evt.set].name} weights loaded`;
+    refreshReady();
+    setStatus(`${what} (${how}) — ready to generate.`, "ok");
+    return;
+  }
+
+  // load-error
+  renderHubFiles();
+  refreshReady();
+  setStatus(`Could not load the weights: ${evt.message}`, "err");
+}
+
 function wireDrop(kind, dropId, inputId, fileId, expectHint) {
   const drop = $(dropId);
   const input = $(inputId);
@@ -215,14 +312,19 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
       setStatus(`"${file.name}" is not an .onnx file.`, "err");
       return;
     }
+    if (session.loading) {
+      setStatus("Wait for the Hugging Face download to finish.", "err");
+      return;
+    }
     label.textContent = `${file.name} · loading…`;
     try {
       const bytes = await readWeights(file);
+      if (session.source !== "local") renderHubFiles();
       session.setWeights(kind, bytes);
-      const mb = (bytes.byteLength / 1024 / 1024).toFixed(0);
-      label.textContent = `${file.name} · ${mb} MB`;
+      label.textContent = `${file.name} · ${mb(bytes.byteLength)} MB`;
       drop.classList.add("loaded");
       refreshReady();
+      if (session.ready) setStatus("Local weights loaded — ready to generate.", "ok");
     } catch (err) {
       label.textContent = expectHint;
       setStatus(`Could not read ${file.name}: ${err.message}`, "err");
@@ -250,14 +352,26 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
   });
 }
 
+/**
+ * Enable Generate when a complete pair is loaded. Only the waiting message is
+ * set here; loads report their own outcome.
+ */
 function refreshReady() {
-  if (session.ready) {
-    el.run.disabled = false;
-    setStatus("Weights loaded — ready to generate.", "ok");
-  } else {
-    el.run.disabled = true;
+  el.run.disabled = running || !session.ready;
+  if (session.ready || session.loading) return;
+  if (session.source === "local") {
     const need = !session.loaded.egnn ? "EGNN" : "AdjMatSeer";
-    setStatus(`Waiting for ${need} weights…`);
+    setStatus(`Waiting for the ${need} file…`);
+  } else {
+    setStatus("Load the model weights above to start.");
+  }
+}
+
+/** Clear the local drop zones — they no longer describe what is loaded. */
+function resetDrops() {
+  for (const kind of KINDS) {
+    $(`drop-${kind}`).classList.remove("loaded");
+    $(`file-${kind}`).textContent = `e.g. ${WEIGHT_SETS[DEFAULT_SET][kind].file}`;
   }
 }
 
@@ -353,7 +467,8 @@ async function run() {
     el.empty.innerHTML = `Generation failed. Check the browser console for details.`;
   } finally {
     running = false;
-    el.run.disabled = false;
+    // After an abort the worker may still be reloading weights.
+    el.run.disabled = !session.ready;
     el.run.textContent = "Generate";
     el.stop.hidden = true;
     el.progress.hidden = true;
@@ -365,7 +480,12 @@ async function runGenerate(c) {
   const result = await session.generate(c, (m) => setStatus(m));
 
   if (result.aborted) {
-    setStatus("Aborted — the worker was restarted.", "err");
+    setStatus(
+      session.loading
+        ? "Aborted — the worker was restarted; reloading the weights…"
+        : "Aborted — the worker was restarted.",
+      "err",
+    );
     el.empty.hidden = false;
     el.empty.textContent = "Run aborted.";
     return;
@@ -527,8 +647,19 @@ function init() {
     el.run.textContent = "Generate";
   });
 
-  wireDrop("egnn", "drop-egnn", "input-egnn", "file-egnn", "egnn_chembl_15_39.onnx");
-  wireDrop("adj", "drop-adj", "input-adj", "file-adj", "adj_mat_seer_chembl_15_39.onnx");
+  renderHubFiles();
+  el.srcHubBtn.addEventListener("click", () => showSource("hub"));
+  el.srcLocalBtn.addEventListener("click", () => showSource("local"));
+  el.hubLoad.addEventListener("click", () => {
+    // The reload after an abort may already be under way.
+    if (session.loading) return;
+    resetDrops();
+    loadHub();
+  });
+  for (const kind of KINDS) {
+    const hint = `e.g. ${WEIGHT_SETS[DEFAULT_SET][kind].file}`;
+    wireDrop(kind, `drop-${kind}`, `input-${kind}`, `file-${kind}`, hint);
+  }
 
   el.run.addEventListener("click", run);
   el.stop.addEventListener("click", () => {

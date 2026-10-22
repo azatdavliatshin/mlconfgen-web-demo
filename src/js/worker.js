@@ -6,19 +6,25 @@
  * shows "Page Unresponsive".
  *
  * Protocol (main → worker):
- *   { type: "weights", kind: "egnn"|"adj", bytes }  transferred, not copied
+ *   { type: "load-hub", set }                       weight set id, see weights.js
+ *   { type: "weights", kind: "egnn"|"adj", bytes }  local file, structured-cloned
  *   { type: "generate", config }
  *   { type: "animate", config }
  *   { type: "abort" }
  *
  * Worker → main:
+ *   { type: "progress", file, loaded, total }       hub download, throttled
+ *   { type: "loaded", set, files: [{ kind, file, bytes, cached }] }
+ *   { type: "load-error", message }
  *   { type: "status", message }
  *   { type: "frame", step, total, molecule }     animate only
  *   { type: "done", molecules?, elapsedMs, ... }
  *   { type: "error", message, name }
  */
-import { createGenerator, seed } from "mlconfgen";
+import { createGenerator, seed, WeightsManager } from "mlconfgen";
 import * as ort from "onnxruntime-web";
+
+import { KINDS, WEIGHT_SETS } from "./weights.js";
 
 // Resolve against the site origin + base path rather than the worker's own
 // URL: the worker lives at src/js/ in dev but assets/ in a build, so a relative
@@ -84,13 +90,71 @@ function loadRdkit() {
   return rdkitPromise;
 }
 
+/**
+ * The weight bytes live here, in the worker, whichever way they arrived. A
+ * change of diffusion steps rebuilds the generator, and rebuilding from these
+ * bytes needs neither the network nor the Cache API — which may be missing,
+ * or may have refused to store a large file.
+ */
 const weights = { egnn: null, adj: null };
 let generator = null;
 let builtWithSteps = null;
 let aborted = false;
+// Bumped by every weights change, so a hub load that is overtaken by another
+// load (or by a local file) drops its result instead of overwriting.
+let weightsVersion = 0;
 
 const post = (msg) => self.postMessage(msg);
 const status = (message) => post({ type: "status", message });
+
+// fetch hands over the body in small chunks — thousands of callbacks for the
+// full set — so only a few progress messages per second cross to the page.
+const PROGRESS_INTERVAL_MS = 100;
+let lastProgressAt = 0;
+const downloaded = new Set();
+
+const weightsManager = new WeightsManager({
+  onProgress: ({ file, loaded, total }) => {
+    downloaded.add(file);
+    const now = performance.now();
+    if (loaded !== total && now - lastProgressAt < PROGRESS_INTERVAL_MS) return;
+    lastProgressAt = now;
+    post({ type: "progress", file, loaded, total });
+  },
+});
+
+function resetWeights() {
+  weightsVersion += 1;
+  weights.egnn = null;
+  weights.adj = null;
+  generator = null;
+  builtWithSteps = null;
+}
+
+/**
+ * Fetch a weight set by name: from the Cache API when it is there, otherwise
+ * from Hugging Face (and into the cache). One file after the other, as
+ * createGenerator does. A file counts as cached when no download progress was
+ * reported for it.
+ */
+async function loadHub(setId) {
+  const set = WEIGHT_SETS[setId];
+  if (!set) throw new Error(`Unknown weight set "${setId}".`);
+
+  resetWeights();
+  const version = weightsVersion;
+  downloaded.clear();
+
+  const files = [];
+  for (const kind of KINDS) {
+    const { file } = set[kind];
+    const bytes = await weightsManager.resolve(file);
+    if (version !== weightsVersion) return;
+    weights[kind] = bytes;
+    files.push({ kind, file, bytes: bytes.byteLength, cached: !downloaded.has(file) });
+  }
+  post({ type: "loaded", set: setId, files });
+}
 
 async function ensureGenerator(diffusionSteps) {
   if (!weights.egnn || !weights.adj) {
@@ -185,7 +249,17 @@ async function runAnimate(config) {
 self.onmessage = async (event) => {
   const msg = event.data;
 
+  if (msg.type === "load-hub") {
+    try {
+      await loadHub(msg.set);
+    } catch (err) {
+      post({ type: "load-error", message: err?.message ?? String(err) });
+    }
+    return;
+  }
+
   if (msg.type === "weights") {
+    weightsVersion += 1;
     weights[msg.kind] = msg.bytes;
     // New weights invalidate any compiled generator.
     generator = null;

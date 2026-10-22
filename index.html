@@ -42,55 +42,48 @@
     </div>
     <div class="panel-bd">
 
-      <p class="notice">
-        <strong>Why you supply the weights.</strong>
-        The trained weights are licensed <strong>CC BY-NC-ND 4.0</strong> and are not
-        redistributed by this demo or published to npm. You download them once from
-        Hugging Face and load them from your own disk. They are read directly into
-        this browser tab — nothing is uploaded anywhere.
-      </p>
+      <div class="seg" role="group" aria-label="Where the weights come from">
+        <button class="seg-btn on" id="src-hub-btn" aria-pressed="true">Hugging Face</button>
+        <button class="seg-btn" id="src-local-btn" aria-pressed="false">Local files</button>
+      </div>
 
-      <ol class="steps">
-        <li class="step">
-          <h3>Open the model repo</h3>
-          <p>
-            Go to
-            <a href="https://huggingface.co/Membrizard/ml_conformer_generator" target="_blank" rel="noopener">huggingface.co/Membrizard/ml_conformer_generator</a>
-            and accept the license terms to enable downloads.
-          </p>
-        </li>
-        <li class="step">
-          <h3>Download two ONNX files</h3>
-          <p>
-            <code>egnn_chembl_15_39.onnx</code> (94&nbsp;MB) and
-            <code>adj_mat_seer_chembl_15_39.onnx</code> (83&nbsp;MB).
-            Grab both from the <em>Files</em> tab.
-          </p>
-        </li>
-        <li class="step">
-          <h3>Drop them below</h3>
-          <p>
-            Drag each file onto its slot, or click to browse. They stay on your
-            machine — loading is instant and works offline afterwards.
-          </p>
-        </li>
-      </ol>
-
-      <div class="drops">
-        <div class="drop" id="drop-egnn" tabindex="0" role="button"
-             aria-label="Load EGNN diffusion model weights">
-          <div class="drop-name">EGNN · Diffusion</div>
-          <div class="drop-file" id="file-egnn">egnn_chembl_15_39.onnx</div>
-          <div class="drop-hint">drop file or click · ~94 MB</div>
-          <input type="file" accept=".onnx" hidden id="input-egnn" />
+      <div id="src-hub">
+        <p class="notice">
+          The weights are downloaded once from
+          <a href="https://huggingface.co/Membrizard/ml_conformer_generator" target="_blank" rel="noopener">Membrizard/ml_conformer_generator</a>
+          on Hugging Face and kept in this browser&rsquo;s cache, so later visits load them
+          without downloading. Inference runs on your machine — nothing is uploaded.
+        </p>
+        <div class="dl-list" id="hub-files"></div>
+        <div class="load-row">
+          <button class="btn" id="hub-load">Load weights</button>
         </div>
+      </div>
 
-        <div class="drop" id="drop-adj" tabindex="0" role="button"
-             aria-label="Load AdjMatSeer bond prediction weights">
-          <div class="drop-name">AdjMatSeer · Bonds</div>
-          <div class="drop-file" id="file-adj">adj_mat_seer_chembl_15_39.onnx</div>
-          <div class="drop-hint">drop file or click · ~83 MB</div>
-          <input type="file" accept=".onnx" hidden id="input-adj" />
+      <div id="src-local" hidden>
+        <p class="notice">
+          Load a matching pair of ONNX files from your disk — to work offline, or to
+          try your own fine-tuned weights. They are read into this tab; nothing is
+          uploaded. The published files are on the
+          <a href="https://huggingface.co/Membrizard/ml_conformer_generator/tree/main" target="_blank" rel="noopener">Hugging Face <em>Files</em> tab</a>.
+        </p>
+
+        <div class="drops">
+          <div class="drop" id="drop-egnn" tabindex="0" role="button"
+               aria-label="Load EGNN diffusion model weights">
+            <div class="drop-name">EGNN · Diffusion</div>
+            <div class="drop-file" id="file-egnn">e.g. small_egnn_chembl_15_39.onnx</div>
+            <div class="drop-hint">drop file or click</div>
+            <input type="file" accept=".onnx" hidden id="input-egnn" />
+          </div>
+
+          <div class="drop" id="drop-adj" tabindex="0" role="button"
+               aria-label="Load AdjMatSeer bond prediction weights">
+            <div class="drop-name">AdjMatSeer · Bonds</div>
+            <div class="drop-file" id="file-adj">e.g. small_adj_mat_seer_obabel_15_39.onnx</div>
+            <div class="drop-hint">drop file or click</div>
+            <input type="file" accept=".onnx" hidden id="input-adj" />
+          </div>
         </div>
       </div>
     </div>
