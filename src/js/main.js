@@ -44,6 +44,11 @@ let running = false;
 let runKind = null;
 // File names in the browser's weights cache; null when the Cache API is unavailable.
 let cachedFiles = new Set();
+// Size of the local EGNN file, to recognise a published set for the estimate.
+let localEgnnBytes = null;
+// Context seed of the last Random shape run; the snippet shows that call until
+// the next Generate or a mode change.
+let lastRandomSeed = null;
 
 /* ── Config ──────────────────────────────────────────────────────────── */
 
@@ -132,29 +137,83 @@ function syncRangeLabels() {
   updateEstimate();
 }
 
-// Fitted to local measurements under single-threaded WASM: 1x10 = 19 s warm,
-// 2x10 ≈ 74 s, 3x20 = 129 s. Cost is close to linear in (steps x samples) at
-// roughly 2.15 s each; a cold run adds ~4 s of graph compilation. Heavily
+// Seconds per denoising step per sample, Generate mode, 20-atom shape —
+// measured with single-threaded WASM on an Apple M1 in Chrome (2×20 and 4×20
+// runs on the presets). Cost grows a little slower than the square of the atom
+// count (38 atoms ≈ 3.3× the 20-atom cost). Animate decodes and ships every
+// frame, about twice the cost; live bonds add a few percent on top. Heavily
 // machine-dependent and deliberately rough — the point is to stop someone
-// unknowingly queuing a forty-minute run.
-const SECONDS_PER_STEP_SAMPLE = 2.15;
+// unknowingly queuing a long run.
+const SECONDS_PER_STEP_SAMPLE = { distilled: 0.15, full: 0.39 };
+const ATOM_EXPONENT = 1.8;
+const MODE_FACTOR = { generate: 1, animate: 2, "animate-bonds": 2.1 };
+
+/**
+ * The weight set a run would use: the loaded hub set, a local pair recognised
+ * by its EGNN file size, or else the set selected for loading. Null for local
+ * files of unknown size (fine-tuned weights, say).
+ */
+function estimateSet() {
+  if (session.source === "hub" && session.hubSet) return WEIGHT_SETS[session.hubSet];
+  if (session.source === "local") {
+    return Object.values(WEIGHT_SETS).find((set) => set.egnn.bytes === localEgnnBytes) ?? null;
+  }
+  return hubSet;
+}
 
 function updateEstimate() {
   const c = config();
-  const secs = c.diffusionSteps * c.nSamples * SECONDS_PER_STEP_SAMPLE;
+  const set = estimateSet();
+  const mode = c.mode === "generate" ? "generate" : c.bondsEveryFrame ? "animate-bonds" : "animate";
+  const perStep = SECONDS_PER_STEP_SAMPLE[set?.id ?? "full"];
+  const secs =
+    c.diffusionSteps * c.nSamples * perStep *
+    (c.nAtoms / 20) ** ATOM_EXPONENT * MODE_FACTOR[mode];
   const text =
     secs < 90
       ? `~${Math.round(secs)}s`
       : `~${Math.round(secs / 60)} min`;
-  el.estimate.textContent = `Estimated runtime ${text} (plus ~5s model compile on the first run).`;
+  const weights = set ? `with ${set.name} weights` : "assuming Full-size custom weights";
+  el.estimate.textContent = `Estimated runtime ${text} ${weights} (the first run adds a second or two to compile the model).`;
   el.estimate.className = secs > 300 ? "ctrl-note warn" : "ctrl-note";
+}
+
+/**
+ * The createGenerator call for the current weights: by name for a hub set,
+ * as bytes for local files.
+ */
+function snippetWeights(c) {
+  if (session.source === "local") {
+    return `// Weights read from your own disk — never uploaded.
+const gen = await createGenerator({
+  ort,
+  egnnOnnx: egnnBytes,        // Uint8Array
+  adjMatSeerOnnx: adjBytes,   // Uint8Array
+  diffusionSteps: ${c.diffusionSteps},
+});`;
+  }
+  const set = estimateSet();
+  return `// Downloaded from Hugging Face on first use, then loaded
+// from the browser cache. Inference runs on this machine.
+const gen = await createGenerator({
+  ort,
+  egnnOnnx: "${set.egnn.file}",
+  adjMatSeerOnnx: "${set.adj.file}",
+  diffusionSteps: ${c.diffusionSteps},
+  onProgress: ({ file, loaded, total }) => showProgress(file, loaded, total),
+});`;
 }
 
 function updateCode() {
   const c = config();
-  const call =
-    c.mode === "animate"
-      ? `for await (const frame of gen.animateGeneration({
+  let call;
+  if (lastRandomSeed !== null) {
+    call = `seed(${c.seed});  // diffusion noise
+// The context seed picks the shape and its atom count.
+const mols = await gen.random({ size: ${c.nSamples}, seed: ${lastRandomSeed} });`;
+  } else if (c.mode === "animate") {
+    call = `seed(${c.seed});
+for await (const frame of gen.animateGeneration({
   referenceContext: [${c.moi.join(", ")}],
   nAtoms: ${c.nAtoms},
   nSamples: ${c.nSamples},
@@ -162,26 +221,21 @@ function updateCode() {
   predictBonds: ${c.bondsEveryFrame ? '"always"' : '"last"'},
 })) {
   render(frame.molecules, frame.step, frame.total);
-}`
-      : `const mols = await gen.generateConformers({
+}`;
+  } else {
+    call = `seed(${c.seed});
+const mols = await gen.generateConformers({
   referenceContext: [${c.moi.join(", ")}],
   nAtoms: ${c.nAtoms},
   nSamples: ${c.nSamples},
   variance: ${c.variance},
 });`;
+  }
 
   const src = `import { createGenerator, seed } from "mlconfgen";
 import * as ort from "onnxruntime-web";
 
-seed(${c.seed});
-
-// Weights come from the user's own disk — never uploaded.
-const gen = await createGenerator({
-  ort,
-  egnnOnnx: egnnBytes,        // Uint8Array
-  adjMatSeerOnnx: adjBytes,   // Uint8Array
-  diffusionSteps: ${c.diffusionSteps},
-});
+${snippetWeights(c)}
 
 ${call}`;
 
@@ -190,7 +244,7 @@ ${call}`;
 
 const KEYWORDS = /^(?:import|from|const|await|for|of|new|return)$/;
 const FUNCS =
-  /^(?:createGenerator|generateConformers|animateGeneration|seed|render)$/;
+  /^(?:createGenerator|generateConformers|animateGeneration|random|seed|render|showProgress)$/;
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
 const escape = (s) => s.replace(/[&<>]/g, (c) => ESC[c]);
@@ -253,6 +307,8 @@ function pickSet(id) {
   }
   el.setNote.textContent = hubSet.note;
   renderHubFiles();
+  updateEstimate();
+  updateCode();
 }
 
 /**
@@ -380,6 +436,8 @@ function onHubEvent(evt) {
     refreshReady();
     setStatus(`${what} (${how}) — ready to generate.`, "ok");
     showLoaded(evt);
+    updateEstimate();
+    updateCode();
     return;
   }
 
@@ -430,6 +488,9 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
       const bytes = await readWeights(file);
       if (session.source !== "local") renderHubFiles();
       session.setWeights(kind, bytes);
+      if (kind === "egnn") localEgnnBytes = bytes.byteLength;
+      updateEstimate();
+      updateCode();
       label.textContent = `${file.name} · ${mb(bytes.byteLength)} MB`;
       drop.classList.add("loaded");
       refreshReady();
@@ -558,6 +619,10 @@ async function run(what = "config") {
   if (running) return;
   const c = config();
   runKind = what === "random" ? "random" : c.mode;
+  if (runKind !== "random" && lastRandomSeed !== null) {
+    lastRandomSeed = null;
+    updateCode();
+  }
   running = true;
   el.run.disabled = true;
   el.random.disabled = true;
@@ -599,6 +664,10 @@ async function runGenerate(c, { random = false } = {}) {
     const contextSeed = crypto.getRandomValues(new Uint32Array(1))[0];
     result = await session.random({ ...c, contextSeed }, (m) => setStatus(m));
     result.contextSeed = contextSeed;
+    if (!result.aborted) {
+      lastRandomSeed = contextSeed;
+      updateCode();
+    }
   } else {
     result = await session.generate(c, (m) => setStatus(m));
   }
@@ -769,6 +838,7 @@ function init() {
   }
   $("c-seed").addEventListener("input", updateCode);
   $("c-mode").addEventListener("change", () => {
+    lastRandomSeed = null;
     updateCode();
     updateEstimate();
     el.run.textContent = "Generate";

@@ -156,11 +156,12 @@
           <select id="c-mode">
             <option value="generate">Generate — final molecules</option>
             <option value="animate">Animate — watch diffusion</option>
-            <option value="animate-bonds">Animate + live bonds (slow)</option>
+            <option value="animate-bonds">Animate + live bonds</option>
           </select>
           <p class="ctrl-note">
-            Animate streams every denoising step. “Live bonds” re-runs bond
-            prediction each frame — much slower, but you see connectivity form.
+            Animate streams every denoising step — about twice the time of
+            Generate. “Live bonds” also predicts bonds on every frame, so you see
+            connectivity form; that adds only a few percent.
           </p>
         </div>
       </div>
@@ -223,8 +224,8 @@
     </div>
     <div class="panel-bd">
       <p style="margin-top:0;color:var(--ink-dim);font-size:13px">
-        This snippet reproduces your current settings. It is the real package API —
-        the demo calls exactly this.
+        This snippet reproduces your current weights, settings and last action with
+        the real package API. The demo runs the same API inside a Web Worker.
       </p>
       <pre class="code" id="code"></pre>
       <div style="margin-top:12px">
@@ -237,7 +238,7 @@
     <p>
       <a href="https://www.npmjs.com/package/mlconfgen" target="_blank" rel="noopener">mlconfgen</a> ·
       <a href="https://github.com/Membrizard/ml_conformer_generator" target="_blank" rel="noopener">source</a> ·
-      Apache-2.0 code, CC BY-NC-ND weights
+      Apache-2.0 code and model weights
     </p>
     <p>
       Sapegin, Bakharev, Krupenya, Gafurov, Pildish &amp; Bear —
