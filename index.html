@@ -54,7 +54,16 @@
           on Hugging Face and kept in this browser&rsquo;s cache, so later visits load them
           without downloading. Inference runs on your machine — nothing is uploaded.
         </p>
+        <div class="ctrl set-pick">
+          <label>Weight Set</label>
+          <div class="seg" id="set-seg" role="group" aria-label="Weight set"></div>
+          <p class="ctrl-note" id="set-note"></p>
+        </div>
         <div class="dl-list" id="hub-files"></div>
+        <div class="cache-line">
+          <span id="cache-info"></span>
+          <button class="mini" id="cache-clear" hidden>Clear cached weights</button>
+        </div>
         <div class="load-row">
           <button class="btn" id="hub-load">Load weights</button>
         </div>
@@ -172,9 +181,17 @@
 
       <div class="actions">
         <button class="btn" id="run" disabled>Generate</button>
+        <button class="btn btn-ghost" id="random" disabled>Random shape</button>
         <button class="btn btn-ghost" id="stop" hidden>Abort</button>
         <span class="status" id="status">Awaiting model weights…</span>
       </div>
+
+      <p class="ctrl-note">
+        <strong>Random shape</strong> picks a molecule shape from a sample of ChEMBL
+        bundled with the package and generates for it. It uses Samples, Diffusion Steps
+        and Seed; the shape preset, MOI eigenvalues, atom count, variance and mode do
+        not apply — the atom count comes with the shape.
+      </p>
 
       <div class="progress" id="progress" hidden>
         <div class="progress-bar" id="progress-bar"></div>

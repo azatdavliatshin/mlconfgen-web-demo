@@ -8,14 +8,17 @@
  * Protocol (main → worker):
  *   { type: "load-hub", set }                       weight set id, see weights.js
  *   { type: "weights", kind: "egnn"|"adj", bytes }  local file, structured-cloned
+ *   { type: "clear-cache" }
  *   { type: "generate", config }
  *   { type: "animate", config }
+ *   { type: "random", config }                       config.contextSeed picks the shape
  *   { type: "abort" }
  *
  * Worker → main:
  *   { type: "progress", file, loaded, total }       hub download, throttled
  *   { type: "loaded", set, files: [{ kind, file, bytes, cached }] }
  *   { type: "load-error", message }
+ *   { type: "cache-cleared" } | { type: "cache-error", message }
  *   { type: "status", message }
  *   { type: "frame", step, total, molecule }     animate only
  *   { type: "done", molecules?, elapsedMs, ... }
@@ -24,7 +27,7 @@
 import { createGenerator, seed, WeightsManager } from "mlconfgen";
 import * as ort from "onnxruntime-web";
 
-import { KINDS, WEIGHT_SETS } from "./weights.js";
+import { CACHE_NAME, KINDS, WEIGHT_SETS } from "./weights.js";
 
 // Resolve against the site origin + base path rather than the worker's own
 // URL: the worker lives at src/js/ in dev but assets/ in a build, so a relative
@@ -114,6 +117,7 @@ let lastProgressAt = 0;
 const downloaded = new Set();
 
 const weightsManager = new WeightsManager({
+  cacheName: CACHE_NAME,
   onProgress: ({ file, loaded, total }) => {
     downloaded.add(file);
     const now = performance.now();
@@ -205,6 +209,31 @@ async function runGenerate(config) {
   });
 }
 
+/**
+ * Generate for a shape drawn from the package's bundled ChEMBL contexts. The
+ * context seed picks the shape (and its atom count); the global seed drives
+ * the diffusion noise, as for Generate — together they reproduce a run.
+ */
+async function runRandom(config) {
+  const gen = await ensureGenerator(config.diffusionSteps);
+  seed(config.seed);
+
+  status("Running reverse diffusion on a random shape…");
+  const started = performance.now();
+
+  const molecules = await gen.random({
+    size: config.nSamples,
+    seed: config.contextSeed,
+  });
+
+  post({
+    type: "done",
+    molecules: molecules.map(serialize),
+    requested: config.nSamples,
+    elapsedMs: performance.now() - started,
+  });
+}
+
 async function runAnimate(config) {
   const gen = await ensureGenerator(config.diffusionSteps);
   seed(config.seed);
@@ -265,6 +294,18 @@ self.onmessage = async (event) => {
     return;
   }
 
+  if (msg.type === "clear-cache") {
+    // Deletes the Cache API cache only; the bytes this worker holds stay
+    // loaded until the page is reloaded.
+    try {
+      await weightsManager.clearCache();
+      post({ type: "cache-cleared" });
+    } catch (err) {
+      post({ type: "cache-error", message: err?.message ?? String(err) });
+    }
+    return;
+  }
+
   if (msg.type === "weights") {
     weightsVersion += 1;
     weights[msg.kind] = msg.bytes;
@@ -280,10 +321,11 @@ self.onmessage = async (event) => {
     return;
   }
 
-  if (msg.type === "generate" || msg.type === "animate") {
+  if (msg.type === "generate" || msg.type === "animate" || msg.type === "random") {
     aborted = false;
     try {
       if (msg.type === "generate") await runGenerate(msg.config);
+      else if (msg.type === "random") await runRandom(msg.config);
       else await runAnimate(msg.config);
     } catch (err) {
       post({

@@ -28,6 +28,7 @@ export class GeneratorSession {
     this.loaded = { egnn: false, adj: false };
     this.loading = false;
     this._load = null;
+    this._clearing = null;
     this._pending = null;
     // Local files only: kept so a terminated worker (see abort) can be handed
     // the weights again without the user re-picking the files. Hub weights are
@@ -46,6 +47,8 @@ export class GeneratorSession {
       const err = new Error(e.message || "Inference worker crashed.");
       this._reject(err);
       this._settleLoad(err);
+      this._clearing?.reject(err);
+      this._clearing = null;
     };
 
     // Restore weights into the fresh worker.
@@ -115,6 +118,18 @@ export class GeneratorSession {
   }
 
   /**
+   * Delete the browser's cached weights (mlconfgen's `clearCache()`). Weights
+   * already loaded into the worker stay usable.
+   */
+  clearCache() {
+    if (this._clearing) return Promise.reject(new Error("Already clearing."));
+    return new Promise((resolve, reject) => {
+      this._clearing = { resolve, reject };
+      this.worker.postMessage({ type: "clear-cache" });
+    });
+  }
+
+  /**
    * Hand a local file to the worker.
    *
    * The buffer is copied rather than transferred: a copy costs one structured
@@ -146,6 +161,14 @@ export class GeneratorSession {
       case "load-error":
         this._settleLoad(new Error(msg.message));
         return;
+      case "cache-cleared":
+      case "cache-error": {
+        const c = this._clearing;
+        this._clearing = null;
+        if (msg.type === "cache-cleared") c?.resolve();
+        else c?.reject(new Error(msg.message));
+        return;
+      }
     }
 
     const p = this._pending;
@@ -203,6 +226,15 @@ export class GeneratorSession {
   /** Batch generation → { molecules, requested, elapsedMs }. */
   generate(config, onStatus) {
     return this._run("generate", config, { onStatus });
+  }
+
+  /**
+   * Generation for a random shape → { molecules, requested, elapsedMs }.
+   * `config.contextSeed` picks the shape; preset, MOI, atom count and variance
+   * do not apply.
+   */
+  random(config, onStatus) {
+    return this._run("random", config, { onStatus });
   }
 
   /** Streaming generation; `onFrame` fires per denoising step. */

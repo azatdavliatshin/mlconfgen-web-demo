@@ -13,18 +13,36 @@ export const WEIGHT_SETS = {
   distilled: {
     id: "distilled",
     name: "Distilled",
+    tag: "",
+    note:
+      "Smaller and about 2.6× faster per step than Full. Its bond predictor is " +
+      "fine-tuned to match OpenBabel, so more samples come out valid (about 70% " +
+      "against 50% for Full, in the upstream benchmark).",
     egnn: { file: "small_egnn_chembl_15_39.onnx", bytes: 38_100_052 },
     adj: { file: "small_adj_mat_seer_obabel_15_39.onnx", bytes: 6_494_943 },
   },
   full: {
     id: "full",
     name: "Full",
+    tag: "slower",
+    note:
+      "The core model the paper reports on: slightly closer shape matches, but a " +
+      "four times larger download and about 2.6× slower per step in the browser.",
     egnn: { file: "egnn_chembl_15_39.onnx", bytes: 98_173_589 },
     adj: { file: "adj_mat_seer_chembl_15_39.onnx", bytes: 87_288_156 },
   },
 };
 
 export const DEFAULT_SET = "distilled";
+
+/**
+ * Cache API cache for downloaded weights. The worker passes it to the
+ * package's WeightsManager as `cacheName`, and the page reads the same cache
+ * to show what is stored — the package's listWeights() would also query the
+ * Hugging Face API, and the page should not contact Hugging Face before the
+ * user asks it to.
+ */
+export const CACHE_NAME = "mlconfgen-weights";
 
 export const KINDS = ["egnn", "adj"];
 

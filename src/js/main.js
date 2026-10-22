@@ -1,7 +1,7 @@
 import { GeneratorSession, readWeights } from "./generator.js";
 import { CUSTOM, PRESETS } from "./presets.js";
 import { ViewerPool } from "./viewer.js";
-import { DEFAULT_SET, KINDS, mb, setBytes, WEIGHT_SETS } from "./weights.js";
+import { CACHE_NAME, DEFAULT_SET, KINDS, mb, setBytes, WEIGHT_SETS } from "./weights.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,6 +28,11 @@ const el = {
   srcLocal: $("src-local"),
   hubFiles: $("hub-files"),
   hubLoad: $("hub-load"),
+  setSeg: $("set-seg"),
+  setNote: $("set-note"),
+  cacheInfo: $("cache-info"),
+  cacheClear: $("cache-clear"),
+  random: $("random"),
 };
 
 const session = new GeneratorSession({ onWeights: onHubEvent });
@@ -35,6 +40,10 @@ let hubSet = WEIGHT_SETS[DEFAULT_SET];
 const pool = new ViewerPool();
 let activePreset = PRESETS[0];
 let running = false;
+// "generate" | "animate" | "random" while a run is in flight.
+let runKind = null;
+// File names in the browser's weights cache; null when the Cache API is unavailable.
+let cachedFiles = new Set();
 
 /* ── Config ──────────────────────────────────────────────────────────── */
 
@@ -222,6 +231,85 @@ function showSource(source) {
   el.srcLocalBtn.setAttribute("aria-pressed", String(!hub));
 }
 
+function renderSets() {
+  for (const set of Object.values(WEIGHT_SETS)) {
+    const b = document.createElement("button");
+    b.className = "seg-btn";
+    b.dataset.set = set.id;
+    b.textContent = [set.name, `${mb(setBytes(set))} MB`, set.tag].filter(Boolean).join(" · ");
+    b.addEventListener("click", () => pickSet(set.id));
+    el.setSeg.appendChild(b);
+  }
+  pickSet(hubSet.id);
+}
+
+/** Select a set to load. What is already loaded stays loaded until Load is clicked. */
+function pickSet(id) {
+  hubSet = WEIGHT_SETS[id];
+  for (const b of el.setSeg.children) {
+    const on = b.dataset.set === id;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  }
+  el.setNote.textContent = hubSet.note;
+  renderHubFiles();
+}
+
+/**
+ * Read which weight files are in the browser cache and show it. Reads the
+ * cache directly (see CACHE_NAME) so no request leaves the page.
+ */
+async function refreshCacheInfo() {
+  try {
+    if (typeof caches === "undefined") throw new Error("no Cache API");
+    // `has` first: `open` would create an empty cache as a side effect.
+    const keys = (await caches.has(CACHE_NAME))
+      ? await (await caches.open(CACHE_NAME)).keys()
+      : [];
+    cachedFiles = new Set(
+      keys.map((req) => decodeURIComponent(new URL(req.url).pathname.split("/").pop())),
+    );
+  } catch {
+    cachedFiles = null;
+  }
+  renderCacheInfo();
+  if (!session.loading) renderHubFiles();
+}
+
+function renderCacheInfo() {
+  if (cachedFiles === null) {
+    el.cacheInfo.innerHTML =
+      '<span class="warn">This browser offers no cache here, so the weights are downloaded on every load.</span>';
+    el.cacheClear.hidden = true;
+    return;
+  }
+  const known = Object.values(WEIGHT_SETS).flatMap((set) => KINDS.map((k) => set[k]));
+  const cached = known.filter((f) => cachedFiles.has(f.file));
+  const bytes = cached.reduce((sum, f) => sum + f.bytes, 0);
+  el.cacheInfo.textContent = cached.length
+    ? `Cached in this browser: ${cached.length} file${cached.length > 1 ? "s" : ""}, ${mb(bytes)} MB.`
+    : "Nothing cached in this browser yet.";
+  el.cacheClear.hidden = !cachedFiles.size;
+}
+
+async function clearCache() {
+  el.cacheClear.disabled = true;
+  try {
+    await session.clearCache();
+    setStatus(
+      session.ready && session.source === "hub"
+        ? "Cached weights deleted — the loaded weights stay usable until you reload the page."
+        : "Cached weights deleted.",
+      "ok",
+    );
+  } catch (err) {
+    setStatus(`Could not clear the cache: ${err.message}`, "err");
+  } finally {
+    el.cacheClear.disabled = false;
+    await refreshCacheInfo();
+  }
+}
+
 /** One row per file of the selected set: name, size, progress bar. */
 function renderHubFiles() {
   el.hubFiles.innerHTML = "";
@@ -233,7 +321,7 @@ function renderHubFiles() {
     row.innerHTML = `
       <div class="dl-hd">
         <span class="dl-name">${file}</span>
-        <span class="dl-state">${mb(bytes)} MB</span>
+        <span class="dl-state">${mb(bytes)} MB${cachedFiles?.has(file) ? " · cached" : ""}</span>
       </div>
       <div class="dl-bar"><div></div></div>`;
     el.hubFiles.appendChild(row);
@@ -257,6 +345,8 @@ function setLoading(on) {
   el.hubLoad.disabled = on;
   el.srcLocalBtn.disabled = on;
   el.srcHubBtn.disabled = on;
+  el.cacheClear.disabled = on;
+  for (const b of el.setSeg.children) b.disabled = on;
 }
 
 async function loadHub() {
@@ -284,14 +374,12 @@ function onHubEvent(evt) {
   setLoading(false);
 
   if (evt.type === "loaded") {
-    for (const f of evt.files) {
-      setRow(f.file, 1, `${mb(f.bytes)} MB · ${f.cached ? "from cache" : "downloaded"}`, true);
-    }
+    const what = evt.restored ? "Weights reloaded into a fresh worker" : `${WEIGHT_SETS[evt.set].name} weights loaded`;
     const fromCache = evt.files.every((f) => f.cached);
     const how = fromCache ? "from the browser cache" : "downloaded from Hugging Face";
-    const what = evt.restored ? "Weights reloaded into a fresh worker" : `${WEIGHT_SETS[evt.set].name} weights loaded`;
     refreshReady();
     setStatus(`${what} (${how}) — ready to generate.`, "ok");
+    showLoaded(evt);
     return;
   }
 
@@ -299,6 +387,27 @@ function onHubEvent(evt) {
   renderHubFiles();
   refreshReady();
   setStatus(`Could not load the weights: ${evt.message}`, "err");
+}
+
+/**
+ * Mark the loaded files, then check they really made it into the cache: the
+ * package only warns in the console when the browser refuses to store a file
+ * (quota, private mode, low disk), and the next visit would download it again.
+ */
+async function showLoaded(evt) {
+  await refreshCacheInfo();
+  // The user may have picked the other set meanwhile; rows show that one.
+  if (evt.set !== hubSet.id) return;
+  for (const f of evt.files) {
+    setRow(f.file, 1, `${mb(f.bytes)} MB · ${f.cached ? "from cache" : "downloaded"}`, true);
+  }
+  if (cachedFiles === null) return;
+  const missing = evt.files.filter((f) => !cachedFiles.has(f.file));
+  if (missing.length) {
+    el.cacheInfo.innerHTML =
+      `<span class="warn">The browser did not keep ${missing.map((f) => f.file).join(" and ")} ` +
+      "in its cache, so it will be downloaded again next time.</span>";
+  }
 }
 
 function wireDrop(kind, dropId, inputId, fileId, expectHint) {
@@ -358,6 +467,7 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
  */
 function refreshReady() {
   el.run.disabled = running || !session.ready;
+  el.random.disabled = el.run.disabled;
   if (session.ready || session.loading) return;
   if (session.source === "local") {
     const need = !session.loaded.egnn ? "EGNN" : "AdjMatSeer";
@@ -443,18 +553,21 @@ function resetOutput() {
 
 /* ── Run ─────────────────────────────────────────────────────────────── */
 
-async function run() {
+/** @param {"config"|"random"} what — the Generate button runs the selected mode */
+async function run(what = "config") {
   if (running) return;
+  const c = config();
+  runKind = what === "random" ? "random" : c.mode;
   running = true;
   el.run.disabled = true;
-  el.run.textContent = "Working…";
+  el.random.disabled = true;
+  (runKind === "random" ? el.random : el.run).textContent = "Working…";
   el.stop.hidden = false;
   resetOutput();
 
-  const c = config();
-
   try {
-    if (c.mode === "animate") await runAnimate(c);
+    if (runKind === "animate") await runAnimate(c);
+    else if (runKind === "random") await runGenerate(c, { random: true });
     else await runGenerate(c);
   } catch (err) {
     console.error(err);
@@ -467,17 +580,28 @@ async function run() {
     el.empty.innerHTML = `Generation failed. Check the browser console for details.`;
   } finally {
     running = false;
+    runKind = null;
     // After an abort the worker may still be reloading weights.
     el.run.disabled = !session.ready;
+    el.random.disabled = el.run.disabled;
     el.run.textContent = "Generate";
+    el.random.textContent = "Random shape";
     el.stop.hidden = true;
     el.progress.hidden = true;
   }
 }
 
-async function runGenerate(c) {
+async function runGenerate(c, { random = false } = {}) {
   setProgress(0, 1, "Initialising…");
-  const result = await session.generate(c, (m) => setStatus(m));
+  let result;
+  if (random) {
+    // A fresh shape on every click; logged with the run so it can be repeated.
+    const contextSeed = crypto.getRandomValues(new Uint32Array(1))[0];
+    result = await session.random({ ...c, contextSeed }, (m) => setStatus(m));
+    result.contextSeed = contextSeed;
+  } else {
+    result = await session.generate(c, (m) => setStatus(m));
+  }
 
   if (result.aborted) {
     setStatus(
@@ -493,11 +617,14 @@ async function runGenerate(c) {
 
   const { molecules, requested, elapsedMs } = result;
 
+  const shape = random ? ` for random shape #${result.contextSeed}` : "";
+
   if (!molecules.length) {
     el.empty.hidden = false;
     el.empty.innerHTML =
       "No valid molecules survived standardization. Try more diffusion steps, or a different shape.";
-    setStatus("0 valid molecules — try adjusting the settings.", "err");
+    const hint = random ? "try another random shape" : "try adjusting the settings";
+    setStatus(`0 valid molecules${shape} — ${hint}.`, "err");
     return;
   }
 
@@ -521,7 +648,7 @@ async function runGenerate(c) {
   ]);
 
   setStatus(
-    `${molecules.length}/${requested} valid in ${(elapsedMs / 1000).toFixed(1)}s.`,
+    `${molecules.length}/${requested} valid${shape} in ${(elapsedMs / 1000).toFixed(1)}s.`,
     "ok",
   );
 }
@@ -647,7 +774,9 @@ function init() {
     el.run.textContent = "Generate";
   });
 
-  renderHubFiles();
+  renderSets();
+  refreshCacheInfo();
+  el.cacheClear.addEventListener("click", clearCache);
   el.srcHubBtn.addEventListener("click", () => showSource("hub"));
   el.srcLocalBtn.addEventListener("click", () => showSource("local"));
   el.hubLoad.addEventListener("click", () => {
@@ -661,11 +790,12 @@ function init() {
     wireDrop(kind, `drop-${kind}`, `input-${kind}`, `file-${kind}`, hint);
   }
 
-  el.run.addEventListener("click", run);
+  el.run.addEventListener("click", () => run());
+  el.random.addEventListener("click", () => run("random"));
   el.stop.addEventListener("click", () => {
-    // Animate stops at the next step boundary; generate can only be stopped by
-    // restarting the worker, which throws away the compiled graphs.
-    const cooperative = config().mode === "animate";
+    // Animate stops at the next step boundary; generate and random can only be
+    // stopped by restarting the worker, which throws away the compiled graphs.
+    const cooperative = runKind === "animate";
     setStatus(
       cooperative ? "Stopping after this step…" : "Restarting worker to stop…",
     );

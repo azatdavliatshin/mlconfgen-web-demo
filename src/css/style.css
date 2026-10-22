@@ -389,6 +389,22 @@ body {
 
 .load-row { margin-top: 14px; }
 
+.set-pick { margin-bottom: 14px; }
+.set-pick .seg { margin-bottom: 0; }
+
+.cache-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.cache-line .warn { color: var(--amber); }
+
 /* ── Dropzones ────────────────────────────────────────────────────────── */
 
 .drops {
