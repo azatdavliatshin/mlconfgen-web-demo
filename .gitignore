@@ -3,7 +3,8 @@ dist/
 .DS_Store
 *.log
 
-# Model weights are CC BY-NC-ND — never commit them.
+# Model weights (Apache-2.0) are fetched from Hugging Face at runtime — never
+# commit or re-host them here.
 *.onnx
 public/_testweights/
 
