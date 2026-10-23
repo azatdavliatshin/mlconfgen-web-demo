@@ -127,12 +127,45 @@ const weightsManager = new WeightsManager({
   },
 });
 
+// True while a generate/animate/random run uses the generator.
+let busy = false;
+// Generators replaced during a run; released once the run is over.
+const retired = [];
+
+/**
+ * Drop the current generator and free its ONNX sessions. ORT-web keeps a
+ * session's model in WASM memory until release() is called — losing the
+ * reference does not free it — so every rebuild without this grows the heap,
+ * by about 230 MB with Full weights, until session creation fails.
+ *
+ * mlconfgen has no release API yet, so this reaches into its internals
+ * (`generativeModel.dynamics`, `adjMatSeer`, `edmAdapter` in 0.2.0); replace
+ * it with the package's own call once there is one. A generator in use by a
+ * run (Animate yields between steps, so a new local file can arrive mid-run)
+ * is released when that run ends.
+ */
+function retireGenerator() {
+  const old = generator;
+  generator = null;
+  builtWithSteps = null;
+  if (!old) return;
+  if (busy) retired.push(old);
+  else releaseSessions(old);
+}
+
+function releaseSessions(gen) {
+  return Promise.allSettled([
+    gen.generativeModel?.dynamics?.release?.(),
+    gen.adjMatSeer?.release?.(),
+    gen.edmAdapter?.release?.(),
+  ]);
+}
+
 function resetWeights() {
   weightsVersion += 1;
   weights.egnn = null;
   weights.adj = null;
-  generator = null;
-  builtWithSteps = null;
+  retireGenerator();
 }
 
 /**
@@ -165,6 +198,16 @@ async function ensureGenerator(diffusionSteps) {
     throw new Error("Both ONNX files must be loaded first.");
   }
   if (generator && builtWithSteps === diffusionSteps) return generator;
+
+  // Free the previous build first, so the old and new sessions never hold
+  // WASM memory at the same time. Runs never overlap, so nothing else is
+  // using it.
+  if (generator) {
+    const old = generator;
+    generator = null;
+    builtWithSteps = null;
+    await releaseSessions(old);
+  }
 
   status("Compiling ONNX graphs — first run takes a moment…");
   generator = await createGenerator({
@@ -310,8 +353,7 @@ self.onmessage = async (event) => {
     weightsVersion += 1;
     weights[msg.kind] = msg.bytes;
     // New weights invalidate any compiled generator.
-    generator = null;
-    builtWithSteps = null;
+    retireGenerator();
     post({ type: "weights-ok", kind: msg.kind, bytes: msg.bytes.byteLength });
     return;
   }
@@ -323,6 +365,7 @@ self.onmessage = async (event) => {
 
   if (msg.type === "generate" || msg.type === "animate" || msg.type === "random") {
     aborted = false;
+    busy = true;
     try {
       if (msg.type === "generate") await runGenerate(msg.config);
       else if (msg.type === "random") await runRandom(msg.config);
@@ -333,6 +376,9 @@ self.onmessage = async (event) => {
         name: err?.name ?? "Error",
         message: err?.message ?? String(err),
       });
+    } finally {
+      busy = false;
+      for (const old of retired.splice(0)) await releaseSessions(old);
     }
   }
 };
