@@ -20,7 +20,8 @@
  *   { type: "load-error", message }
  *   { type: "cache-cleared" } | { type: "cache-error", message }
  *   { type: "status", message }
- *   { type: "frame", step, total, molecule }     animate only
+ *   { type: "weights-ok", kind, bytes }            local file received
+ *   { type: "frame", step, total, molecules }    animate only
  *   { type: "done", molecules?, elapsedMs, ... }
  *   { type: "error", message, name }
  */

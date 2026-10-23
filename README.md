@@ -59,8 +59,9 @@ the page is reloaded.
   therefore accurate, not a simplification.
 - **Live 3D** — every result gets an interactive [3Dmol.js](https://3dmol.csb.pitt.edu/)
   viewer; molfiles can be copied or downloaded.
-- **A matching code snippet** — panel 04 mirrors your current weights, settings and
-  last action as real package code.
+- **A matching code snippet** — panel 04 shows the package API calls for your
+  current weights, settings and last action. Under a bundler you also need to point
+  ONNX Runtime and RDKit at their `.wasm` files, as `src/js/worker.js` does.
 
 ## Running locally
 
@@ -105,9 +106,9 @@ root, build with `BASE_PATH=/`.
   with Distilled** and **0.39 s with Full** for a 20-atom shape, growing roughly
   with the square of the atom count (a 38-atom shape costs about 3.3× as much).
   The page defaults (1 sample × 20 steps) take about 3 s with Distilled and 8 s
-  with Full. Animate takes about twice as long as Generate, because every frame is
-  decoded and sent to the page; "live bonds" adds a bond prediction per frame, which
-  costs only a few percent more. The page shows a live runtime estimate for the
+  with Full. Animate takes about twice as long as Generate, because it runs the
+  network twice per step (once to step, once to decode the frame); "live bonds" adds
+  a bond prediction per frame, which costs only a few percent more. The page shows a live runtime estimate for the
   loaded weight set as you move the sliders.
 
   Multi-threading would need `SharedArrayBuffer` and thus cross-origin isolation,

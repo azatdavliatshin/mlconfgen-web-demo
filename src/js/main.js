@@ -61,9 +61,9 @@ function config() {
     variance: Number($("c-variance").value),
     diffusionSteps: Number($("c-steps").value),
     seed: Number($("c-seed").value) || 0,
-    // "animate-bonds" is the animate path with AdjMatSeer on every frame. That
-    // costs one extra inference per denoising step and dominates runtime under
-    // WASM, so plain "animate" predicts bonds on the final frame only.
+    // "animate-bonds" is the animate path with AdjMatSeer on every frame: one
+    // extra bond prediction per denoising step, a few percent of the runtime.
+    // Plain "animate" predicts bonds on the final frame only.
     mode: raw === "generate" ? "generate" : "animate",
     bondsEveryFrame: raw === "animate-bonds",
   };
@@ -140,11 +140,16 @@ function syncRangeLabels() {
 // Seconds per denoising step per sample, Generate mode, 20-atom shape —
 // measured with single-threaded WASM on an Apple M1 in Chrome (2×20 and 4×20
 // runs on the presets). Cost grows a little slower than the square of the atom
-// count (38 atoms ≈ 3.3× the 20-atom cost). Animate decodes and ships every
-// frame, about twice the cost; live bonds add a few percent on top. Heavily
+// count (38 atoms ≈ 3.3× the 20-atom cost). Animate runs the network twice per
+// step (once to step, once to decode the frame), about twice the cost; live
+// bonds add a few percent on top. Heavily
 // machine-dependent and deliberately rough — the point is to stop someone
 // unknowingly queuing a long run.
 const SECONDS_PER_STEP_SAMPLE = { distilled: 0.15, full: 0.39 };
+
+// Where the snippet's readers can see how this demo wires up the WASM files.
+const WORKER_SOURCE_URL =
+  "https://github.com/azatdavliatshin/mlconfgen-web-demo/blob/main/src/js/worker.js";
 const ATOM_EXPONENT = 1.8;
 const MODE_FACTOR = { generate: 1, animate: 2, "animate-bonds": 2.1 };
 
@@ -234,6 +239,10 @@ const mols = await gen.generateConformers({
 
   const src = `import { createGenerator, seed } from "mlconfgen";
 import * as ort from "onnxruntime-web";
+
+// Under a bundler, also point ort.env.wasm.wasmPaths and the rdkitLoader
+// option at the ONNX Runtime and RDKit .wasm files, as this demo does:
+// ${WORKER_SOURCE_URL}
 
 ${snippetWeights(c)}
 
@@ -454,7 +463,10 @@ function onHubEvent(evt) {
   renderHubFiles();
   refreshCacheInfo();
   refreshReady();
-  setStatus(`Could not load the weights: ${evt.message}`, "err");
+  // The package's message ends in the browser's own fetch error, which says
+  // nothing about what to do.
+  const offline = /Failed to fetch|NetworkError|Load failed/.test(evt.message);
+  setStatus(`Could not load the weights: ${evt.message}${offline ? " — check your connection" : ""}`, "err");
 }
 
 /**
