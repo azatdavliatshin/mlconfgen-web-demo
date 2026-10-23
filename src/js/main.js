@@ -582,7 +582,9 @@ function makeCard(index, mol, { label } = {}) {
       <button class="mini" data-act="dl">Download</button>
     </div>`;
 
-  const block = mol.molBlock;
+  // Animate feeds later frames into the same card (see update below), so Copy
+  // and Download read the current molecule, not the one the card started with.
+  let block = mol.molBlock;
   const viewer = pool.create(card.querySelector(".viewer"), { spin: true });
   viewer.setMolecule(block);
 
@@ -600,7 +602,14 @@ function makeCard(index, mol, { label } = {}) {
     URL.revokeObjectURL(url);
   });
 
-  return { card, viewer };
+  /** Show a later frame of the same molecule in place, keeping the camera. */
+  const update = (next) => {
+    block = next.molBlock;
+    viewer.updateMolecule(block);
+    card.querySelector(".card-meta").textContent = `${next.nAtoms} atoms · ${next.nBonds} bonds`;
+  };
+
+  return { card, viewer, update };
 }
 
 function showStats(entries) {
@@ -773,9 +782,7 @@ async function runAnimate(c) {
         el.grid.appendChild(made.card);
         made.viewer.resize();
       } else {
-        cards[i].viewer.updateMolecule(mol.molBlock);
-        cards[i].card.querySelector(".card-meta").textContent =
-          `${mol.nAtoms} atoms · ${mol.nBonds} bonds`;
+        cards[i].update(mol);
       }
     });
   };
