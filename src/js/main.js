@@ -370,7 +370,8 @@ async function clearCache() {
   } catch (err) {
     setStatus(`Could not clear the cache: ${err.message}`, "err");
   } finally {
-    el.cacheClear.disabled = false;
+    // A load may have started meanwhile and locked the button.
+    el.cacheClear.disabled = session.loading;
     await refreshCacheInfo();
   }
 }
@@ -418,10 +419,11 @@ async function loadHub() {
   // The session refuses a load during a run; without this the controls would
   // stay locked with nothing left to unlock them.
   if (running) {
-    setStatus("Wait for the current run to finish, then load the weights.", "err");
+    setStatus("Wait for the current run to finish, then load the weights.");
     return;
   }
   resetDrops();
+  localEgnnBytes = null;
   renderHubFiles();
   setLoading(true);
   // Start the load first: only then does the session count as loading, so
@@ -509,6 +511,13 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
     label.textContent = `${file.name} · loading…`;
     try {
       const bytes = await readWeights(file);
+      // The read can outlast a Load click (or an Abort that restarts the
+      // worker): a hub load that began meanwhile must not be replaced.
+      if (session.loading) {
+        label.textContent = expectHint;
+        setStatus("Wait for the Hugging Face download to finish.", "err");
+        return;
+      }
       if (session.source !== "local") renderHubFiles();
       session.setWeights(kind, bytes);
       if (kind === "egnn") localEgnnBytes = bytes.byteLength;
@@ -516,8 +525,12 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
       updateCode();
       label.textContent = `${file.name} · ${mb(bytes.byteLength)} MB`;
       drop.classList.add("loaded");
-      refreshReady();
-      if (session.ready) setStatus("Local weights loaded — ready to generate.", "ok");
+      // During a run the status line belongs to the run, and the buttons are
+      // re-derived when it ends.
+      if (!running) {
+        refreshReady();
+        if (session.ready) setStatus("Local weights loaded — ready to generate.", "ok");
+      }
     } catch (err) {
       label.textContent = expectHint;
       setStatus(`Could not read ${file.name}: ${err.message}`, "err");
@@ -900,6 +913,7 @@ function init() {
   el.run.addEventListener("click", () => run());
   el.random.addEventListener("click", () => run("random"));
   el.stop.addEventListener("click", () => {
+    if (!running) return;
     // Animate stops at the next step boundary; generate and random can only be
     // stopped by restarting the worker, which throws away the compiled graphs.
     const cooperative = runKind === "animate";
