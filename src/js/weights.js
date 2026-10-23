@@ -27,7 +27,9 @@ export const WEIGHT_SETS = {
     tag: "slower",
     note:
       "The core model the paper reports on: slightly closer shape matches, but a " +
-      "four times larger download and about 2.6× slower per step in the browser.",
+      "four times larger download and about 2.6× slower per step in the browser. " +
+      "The presets give valid molecules with Distilled; with Full they may need " +
+      "more samples or steps.",
     egnn: { file: "egnn_chembl_15_39.onnx", bytes: 98_173_589 },
     adj: { file: "adj_mat_seer_chembl_15_39.onnx", bytes: 87_288_156 },
   },
