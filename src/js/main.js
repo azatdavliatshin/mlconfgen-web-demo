@@ -406,12 +406,21 @@ function setLoading(on) {
 }
 
 async function loadHub() {
+  // The session refuses a load during a run; without this the controls would
+  // stay locked with nothing left to unlock them.
+  if (running) {
+    setStatus("Wait for the current run to finish, then load the weights.", "err");
+    return;
+  }
   renderHubFiles();
   setLoading(true);
+  // Start the load first: only then does the session count as loading, so
+  // Generate and Random stay disabled for the whole load.
+  const pending = session.loadFromHub(hubSet.id);
   refreshReady();
   setStatus(`Loading ${hubSet.name} weights — from the browser cache if they are there…`);
   // Outcome and errors are reported through onHubEvent.
-  await session.loadFromHub(hubSet.id).catch(() => {});
+  await pending.catch(() => {});
 }
 
 /**
@@ -443,6 +452,7 @@ function onHubEvent(evt) {
 
   // load-error
   renderHubFiles();
+  refreshCacheInfo();
   refreshReady();
   setStatus(`Could not load the weights: ${evt.message}`, "err");
 }
@@ -508,7 +518,12 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
       input.click();
     }
   });
-  input.addEventListener("change", () => accept(input.files[0]));
+  input.addEventListener("change", () => {
+    accept(input.files[0]);
+    // Let the same file be picked again: the input fires no change event for
+    // a selection it already holds.
+    input.value = "";
+  });
 
   drop.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -673,6 +688,9 @@ async function runGenerate(c, { random = false } = {}) {
   }
 
   if (result.aborted) {
+    // The new worker is reloading the hub set; keep the load controls locked
+    // until it reports back (onHubEvent unlocks them).
+    if (session.loading) setLoading(true);
     setStatus(
       session.loading
         ? "Aborted — the worker was restarted; reloading the weights…"

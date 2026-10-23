@@ -262,6 +262,9 @@ export class GeneratorSession {
     }
 
     this.worker.terminate();
+    // A cache clear queued behind the run died with the worker.
+    this._clearing?.reject(new Error("The worker was restarted — try again."));
+    this._clearing = null;
     const p = this._pending;
     this._pending = null;
     this._spawn();
