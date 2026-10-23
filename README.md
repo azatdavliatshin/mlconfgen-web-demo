@@ -4,42 +4,51 @@ A browser playground for [`mlconfgen`](https://www.npmjs.com/package/mlconfgen) 
 spatially-aware molecule generation via equivariant diffusion, running **entirely
 client-side**. No server, no upload, no inference API.
 
-You supply the model weights from your own machine; the demo runs the real npm
-package against them through ONNX Runtime Web and renders the results in an
-interactive 3D viewer.
-
-## Why you bring your own weights
-
-The trained weights are licensed **CC BY-NC-ND 4.0** and are deliberately not
-redistributed here — they are not on npm, not committed to this repo, and not
-re-hosted by the deployed site. That is not a limitation to work around; it is
-how the model is meant to be used.
-
-In practice it makes for a better demo. You download the weights once from
-Hugging Face, drop them into the page, and everything from then on happens on
-your own hardware.
+The page loads the model weights from Hugging Face, runs the real npm package against
+them through ONNX Runtime Web, and renders the results in an interactive 3D viewer.
 
 ## Using the demo
 
-1. Open the [model repo on Hugging Face](https://huggingface.co/Membrizard/ml_conformer_generator)
-   and accept the license terms to enable downloads.
-2. Download both ONNX files from the *Files* tab:
-   - `egnn_chembl_15_39.onnx` (~94 MB) — the diffusion model
-   - `adj_mat_seer_chembl_15_39.onnx` (~83 MB) — the bond predictor
-3. Drag each file onto its slot in the page.
-4. Pick a shape preset, adjust the controls, and hit **Generate**.
+1. Pick a weight set and click **Load**. The first time, the two ONNX files are
+   downloaded from [Membrizard/ml_conformer_generator](https://huggingface.co/Membrizard/ml_conformer_generator)
+   on Hugging Face, with a progress bar per file. They are kept in the browser's cache,
+   so later visits load them without downloading.
+2. Pick a shape preset, adjust the controls, and hit **Generate** — or **Random shape**
+   to generate for a molecule shape drawn from a ChEMBL sample bundled with the package.
 
-The files are read with the `File` API into a `Uint8Array` and handed straight to
-the package. Nothing leaves the tab.
+### Weight sets
+
+| Set | Files | Download | Notes |
+|---|---|---|---|
+| **Distilled** (default) | `small_egnn_chembl_15_39.onnx`, `small_adj_mat_seer_obabel_15_39.onnx` | 45 MB | About 2.6× faster per step. Its bond predictor is fine-tuned to match OpenBabel, so more samples come out valid (about 70% against 50% in the upstream benchmark). |
+| **Full** | `egnn_chembl_15_39.onnx`, `adj_mat_seer_chembl_15_39.onnx` | 185 MB | The core model the paper reports on: slightly closer shape matches, four times the download, slower. |
+
+The two files of a set belong together; the page never mixes sets.
+
+### Local files
+
+**Local files** loads a matching pair of ONNX files from your disk instead — to work
+offline, or to try your own fine-tuned weights. The files are read with the `File` API
+into a `Uint8Array` and handed straight to the package. Nothing leaves the tab.
+
+### The browser cache
+
+Downloads are stored with the Cache API (`mlconfgen-weights`), which needs HTTPS or
+`localhost`. The page shows what is cached and has a **Clear cached weights** button.
+Browsers may evict the cache under storage pressure, and may refuse to store a file at
+all (private windows, a full disk); the page says so, and the weights are simply
+downloaded again next time. Weights already loaded stay usable after clearing until
+the page is reloaded.
 
 ## What it demonstrates
 
 - **Shape-conditioned generation** — the model is conditioned on a triplet of
   moment-of-inertia eigenvalues describing a target shape envelope. Presets cover
   several ligand geometries; you can also enter the values by hand.
-- **Both API paths** — `generateConformers()` for a batch of final molecules, and
-  `animateGeneration()` streaming one frame per denoising step so you can watch
-  molecules condense out of noise.
+- **The package API** — `createGenerator()` resolving weights by name (download, cache,
+  progress), `generateConformers()` for a batch of final molecules, `random()` for a
+  random shape, and `animateGeneration()` streaming one frame per denoising step so you
+  can watch molecules condense out of noise.
 
   Animation is a single batched reverse-diffusion pass: every sample rides in
   one tensor whose first dimension is `nSamples`, so all molecules advance the
@@ -50,8 +59,9 @@ the package. Nothing leaves the tab.
   therefore accurate, not a simplification.
 - **Live 3D** — every result gets an interactive [3Dmol.js](https://3dmol.csb.pitt.edu/)
   viewer; molfiles can be copied or downloaded.
-- **A matching code snippet** — panel 04 mirrors your current settings as real
-  package code.
+- **A matching code snippet** — panel 04 shows the package API calls for your
+  current weights, settings and last action. Under a bundler you also need to point
+  ONNX Runtime and RDKit at their `.wasm` files, as `src/js/worker.js` does.
 
 ## Running locally
 
@@ -65,6 +75,9 @@ Then open the printed URL. Production build:
 ```bash
 npm run build && npm run preview
 ```
+
+`npm run preview` serves the build without the dev server's cross-origin isolation
+headers, the same as GitHub Pages.
 
 ## Deploying
 
@@ -81,30 +94,34 @@ root, build with `BASE_PATH=/`.
 - **Runtime assets are self-hosted.** The ONNX Runtime and RDKit WASM binaries
   are served from `public/`, so the deployed page has no CDN dependency. This
   also pins RDKit's `locateFile`, which otherwise resolves incorrectly under a
-  GitHub Pages project subdirectory.
+  GitHub Pages project subdirectory. The model weights are the one thing fetched
+  from elsewhere — from Hugging Face, never re-hosted here.
 
-  They are copied out of `node_modules` by `scripts/sync-runtime-assets.js`,
+  The binaries are copied out of `node_modules` by `scripts/sync-runtime-assets.js`,
   which runs automatically on `postinstall`, `dev`, and `build` — so ~32 MB of
   binaries stay out of git. `public/ort/` and `public/rdkit/` are gitignored;
   run `npm install` (or `npm run sync-assets`) to populate them.
-- **Speed.** Generation is CPU-bound single-threaded WASM inference, and it is
-  not fast: measured locally at roughly **2.15 s per denoising step per sample**
-  (1 sample x 10 steps ran in 19 s warm, 23.5 s cold). The defaults
-  (2 samples × 15 steps) take about a minute — a measured run came in at 63.6 s
-  against a 65 s estimate. The first run adds a one-off ~4 s ONNX graph
-  compilation. The page shows a live runtime estimate as you move the sliders,
-  and the slider ranges are capped so the worst case stays around ten minutes.
+- **Speed.** Generation is CPU-bound single-threaded WASM inference. Measured on an
+  Apple M1 in Chrome, Generate costs about **0.15 s per denoising step per sample
+  with Distilled** and **0.39 s with Full** for a 20-atom shape, growing roughly
+  with the square of the atom count (a 38-atom shape costs about 3.3× as much).
+  The page defaults (1 sample × 20 steps) take about 3 s with Distilled and 8 s
+  with Full. Animate takes about twice as long as Generate, because it runs the
+  network twice per step (once to step, once to decode the frame); "live bonds" adds
+  a bond prediction per frame, which costs only a few percent more. The page shows a live runtime estimate for the
+  loaded weight set as you move the sliders.
 
   Multi-threading would need `SharedArrayBuffer` and thus cross-origin isolation,
   which GitHub Pages does not provide. Measured locally *with* isolation, four
   threads made session creation slower rather than faster, so the demo pins
   `numThreads = 1`.
-
 - **Inference runs in a Web Worker**, so the page stays interactive while the
   model runs. Doing this work on the main thread freezes the tab outright and
-  Chrome reports "Page Unresponsive".
-- **Requires `mlconfgen` ≥ 0.1.1**, which is the first release whose RDKit loader
-  resolves correctly in a browser.
+  Chrome reports "Page Unresponsive". The worker downloads the weights itself and
+  keeps them, so changing the number of diffusion steps rebuilds the model without
+  touching the network.
+- **Requires `mlconfgen` ≥ 0.2.0**, the first release that resolves weights by name
+  from Hugging Face, caches them in the browser and provides `random()`.
 
 ## Credits
 
@@ -116,4 +133,6 @@ If you use MLConfGen in research, please cite:
 > shape-constrained molecular generation.* Digital Discovery, 2025.
 > [10.1039/D5DD00318K](https://doi.org/10.1039/D5DD00318K)
 
-Demo code Apache-2.0. Model weights CC BY-NC-ND 4.0 and not included.
+Demo code Apache-2.0. Model weights Apache-2.0, downloaded from
+[Hugging Face](https://huggingface.co/Membrizard/ml_conformer_generator) at runtime
+and not included in this repository.

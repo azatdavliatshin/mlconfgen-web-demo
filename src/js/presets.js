@@ -6,8 +6,10 @@
  * each principal axis. Small, near-equal values read as compact and globular;
  * one large value against two small ones reads as elongated.
  *
- * Each preset also carries the atom count and variance that produce good
- * results for that shape (steps 20, samples 1, seed 42).
+ * Each preset also carries the atom count and variance for that shape (steps
+ * 20, samples 1, seed 42). With the Distilled weights these give valid
+ * molecules; with Full the same settings can give none — retuning per weight
+ * set is deferred.
  */
 export const PRESETS = [
   {

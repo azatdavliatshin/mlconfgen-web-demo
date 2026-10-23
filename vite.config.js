@@ -56,6 +56,12 @@ export default defineConfig({
     // Emscripten/UMD builds Vite should not try to pre-bundle as ESM.
     exclude: ["onnxruntime-web"],
   },
+  // `vite preview` inherits server.headers unless told otherwise. GitHub Pages
+  // sends no COOP/COEP, so the production preview should not either — otherwise
+  // it runs cross-origin isolated and hides problems Pages would show.
+  preview: {
+    headers: {},
+  },
   server: {
     // Honor an externally assigned port (e.g. from a preview harness).
     port: Number(process.env.PORT) || 5173,

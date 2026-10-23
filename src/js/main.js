@@ -1,6 +1,7 @@
 import { GeneratorSession, readWeights } from "./generator.js";
 import { CUSTOM, PRESETS } from "./presets.js";
 import { ViewerPool } from "./viewer.js";
+import { CACHE_NAME, DEFAULT_SET, KINDS, mb, setBytes, WEIGHT_SETS } from "./weights.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,12 +22,33 @@ const el = {
   moi: ["c-moi0", "c-moi1", "c-moi2"].map($),
   vMoi: $("v-moi"),
   estimate: $("estimate"),
+  srcHubBtn: $("src-hub-btn"),
+  srcLocalBtn: $("src-local-btn"),
+  srcHub: $("src-hub"),
+  srcLocal: $("src-local"),
+  hubFiles: $("hub-files"),
+  hubLoad: $("hub-load"),
+  setSeg: $("set-seg"),
+  setNote: $("set-note"),
+  cacheInfo: $("cache-info"),
+  cacheClear: $("cache-clear"),
+  random: $("random"),
 };
 
-const session = new GeneratorSession();
+const session = new GeneratorSession({ onWeights: onHubEvent });
+let hubSet = WEIGHT_SETS[DEFAULT_SET];
 const pool = new ViewerPool();
 let activePreset = PRESETS[0];
 let running = false;
+// "generate" | "animate" | "random" while a run is in flight.
+let runKind = null;
+// File names in the browser's weights cache; null when the Cache API is unavailable.
+let cachedFiles = new Set();
+// Size of the local EGNN file, to recognise a published set for the estimate.
+let localEgnnBytes = null;
+// Context seed of the last Random shape run; the snippet shows that call until
+// the next Generate or a mode change.
+let lastRandomSeed = null;
 
 /* ── Config ──────────────────────────────────────────────────────────── */
 
@@ -39,9 +61,9 @@ function config() {
     variance: Number($("c-variance").value),
     diffusionSteps: Number($("c-steps").value),
     seed: Number($("c-seed").value) || 0,
-    // "animate-bonds" is the animate path with AdjMatSeer on every frame. That
-    // costs one extra inference per denoising step and dominates runtime under
-    // WASM, so plain "animate" predicts bonds on the final frame only.
+    // "animate-bonds" is the animate path with AdjMatSeer on every frame: one
+    // extra bond prediction per denoising step, a few percent of the runtime.
+    // Plain "animate" predicts bonds on the final frame only.
     mode: raw === "generate" ? "generate" : "animate",
     bondsEveryFrame: raw === "animate-bonds",
   };
@@ -115,29 +137,93 @@ function syncRangeLabels() {
   updateEstimate();
 }
 
-// Fitted to local measurements under single-threaded WASM: 1x10 = 19 s warm,
-// 2x10 ≈ 74 s, 3x20 = 129 s. Cost is close to linear in (steps x samples) at
-// roughly 2.15 s each; a cold run adds ~4 s of graph compilation. Heavily
+// Seconds per denoising step per sample, Generate mode, 20-atom shape —
+// measured with single-threaded WASM on an Apple M1 in Chrome (2×20 and 4×20
+// runs on the presets). Cost grows a little slower than the square of the atom
+// count (38 atoms ≈ 3.3× the 20-atom cost). Animate runs the network twice per
+// step (once to step, once to decode the frame), about twice the cost; live
+// bonds add a few percent on top. Heavily
 // machine-dependent and deliberately rough — the point is to stop someone
-// unknowingly queuing a forty-minute run.
-const SECONDS_PER_STEP_SAMPLE = 2.15;
+// unknowingly queuing a long run.
+const SECONDS_PER_STEP_SAMPLE = { distilled: 0.15, full: 0.39 };
+
+// Where the snippet's readers can see how this demo wires up the WASM files.
+const WORKER_SOURCE_URL =
+  "https://github.com/azatdavliatshin/mlconfgen-web-demo/blob/main/src/js/worker.js";
+const ATOM_EXPONENT = 1.8;
+const MODE_FACTOR = { generate: 1, animate: 2, "animate-bonds": 2.1 };
+
+/**
+ * The weight set a run would use: the loaded hub set, a local pair recognised
+ * by its EGNN file size, or else the set selected for loading. Null for local
+ * files of unknown size (fine-tuned weights, say).
+ */
+function estimateSet() {
+  if (session.source === "hub" && session.hubSet) return WEIGHT_SETS[session.hubSet];
+  if (session.source === "local") {
+    return Object.values(WEIGHT_SETS).find((set) => set.egnn.bytes === localEgnnBytes) ?? null;
+  }
+  return hubSet;
+}
 
 function updateEstimate() {
   const c = config();
-  const secs = c.diffusionSteps * c.nSamples * SECONDS_PER_STEP_SAMPLE;
+  const set = estimateSet();
+  const mode = c.mode === "generate" ? "generate" : c.bondsEveryFrame ? "animate-bonds" : "animate";
+  const perStep = SECONDS_PER_STEP_SAMPLE[set?.id ?? "full"];
+  const secs =
+    c.diffusionSteps * c.nSamples * perStep *
+    (c.nAtoms / 20) ** ATOM_EXPONENT * MODE_FACTOR[mode];
   const text =
     secs < 90
       ? `~${Math.round(secs)}s`
       : `~${Math.round(secs / 60)} min`;
-  el.estimate.textContent = `Estimated runtime ${text} (plus ~5s model compile on the first run).`;
+  const weights = set ? `with ${set.name} weights` : "assuming Full-size custom weights";
+  el.estimate.textContent = `Estimated runtime ${text} ${weights} (the first run adds a second or two to compile the model).`;
   el.estimate.className = secs > 300 ? "ctrl-note warn" : "ctrl-note";
+}
+
+/**
+ * The createGenerator call for the current weights: the package defaults for
+ * the Full set, by name for Distilled, as bytes for local files.
+ */
+function snippetWeights(c) {
+  if (session.source === "local") {
+    return `// Weights read from your own disk — never uploaded.
+const gen = await createGenerator({
+  ort,
+  egnnOnnx: egnnBytes,        // Uint8Array
+  adjMatSeerOnnx: adjBytes,   // Uint8Array
+  diffusionSteps: ${c.diffusionSteps},
+});`;
+  }
+  const set = estimateSet();
+  if (set.id === "full") {
+    return `// Default weights: downloaded from Hugging Face on first use, then cached.
+// Pass onProgress({ file, loaded, total }) to show download progress.
+const gen = await createGenerator({ ort, diffusionSteps: ${c.diffusionSteps} });`;
+  }
+  return `// Bare file names are downloaded from Hugging Face and cached automatically.
+// Leave them out to get the default (Full) weights.
+// Pass onProgress({ file, loaded, total }) to show download progress.
+const gen = await createGenerator({
+  ort,
+  egnnOnnx: "${set.egnn.file}",
+  adjMatSeerOnnx: "${set.adj.file}",
+  diffusionSteps: ${c.diffusionSteps},
+});`;
 }
 
 function updateCode() {
   const c = config();
-  const call =
-    c.mode === "animate"
-      ? `for await (const frame of gen.animateGeneration({
+  let call;
+  if (lastRandomSeed !== null) {
+    call = `seed(${c.seed});  // diffusion noise
+// The context seed picks the shape and its atom count.
+const mols = await gen.random({ size: ${c.nSamples}, seed: ${lastRandomSeed} });`;
+  } else if (c.mode === "animate") {
+    call = `seed(${c.seed});
+for await (const frame of gen.animateGeneration({
   referenceContext: [${c.moi.join(", ")}],
   nAtoms: ${c.nAtoms},
   nSamples: ${c.nSamples},
@@ -145,26 +231,25 @@ function updateCode() {
   predictBonds: ${c.bondsEveryFrame ? '"always"' : '"last"'},
 })) {
   render(frame.molecules, frame.step, frame.total);
-}`
-      : `const mols = await gen.generateConformers({
+}`;
+  } else {
+    call = `seed(${c.seed});
+const mols = await gen.generateConformers({
   referenceContext: [${c.moi.join(", ")}],
   nAtoms: ${c.nAtoms},
   nSamples: ${c.nSamples},
   variance: ${c.variance},
 });`;
+  }
 
   const src = `import { createGenerator, seed } from "mlconfgen";
 import * as ort from "onnxruntime-web";
 
-seed(${c.seed});
+// Under a bundler, also point ort.env.wasm.wasmPaths and the rdkitLoader
+// option at the ONNX Runtime and RDKit .wasm files, as this demo does:
+// ${WORKER_SOURCE_URL}
 
-// Weights come from the user's own disk — never uploaded.
-const gen = await createGenerator({
-  ort,
-  egnnOnnx: egnnBytes,        // Uint8Array
-  adjMatSeerOnnx: adjBytes,   // Uint8Array
-  diffusionSteps: ${c.diffusionSteps},
-});
+${snippetWeights(c)}
 
 ${call}`;
 
@@ -173,7 +258,7 @@ ${call}`;
 
 const KEYWORDS = /^(?:import|from|const|await|for|of|new|return)$/;
 const FUNCS =
-  /^(?:createGenerator|generateConformers|animateGeneration|seed|render)$/;
+  /^(?:createGenerator|generateConformers|animateGeneration|random|seed|render)$/;
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
 const escape = (s) => s.replace(/[&<>]/g, (c) => ESC[c]);
@@ -204,6 +289,215 @@ function highlight(src) {
 
 /* ── Weight loading ──────────────────────────────────────────────────── */
 
+function showSource(source) {
+  const hub = source === "hub";
+  el.srcHub.hidden = !hub;
+  el.srcLocal.hidden = hub;
+  el.srcHubBtn.classList.toggle("on", hub);
+  el.srcLocalBtn.classList.toggle("on", !hub);
+  el.srcHubBtn.setAttribute("aria-pressed", String(hub));
+  el.srcLocalBtn.setAttribute("aria-pressed", String(!hub));
+}
+
+function renderSets() {
+  for (const set of Object.values(WEIGHT_SETS)) {
+    const b = document.createElement("button");
+    b.className = "seg-btn";
+    b.dataset.set = set.id;
+    b.textContent = [set.name, `${mb(setBytes(set))} MB`, set.tag].filter(Boolean).join(" · ");
+    b.addEventListener("click", () => pickSet(set.id));
+    el.setSeg.appendChild(b);
+  }
+  pickSet(hubSet.id);
+}
+
+/** Select a set to load. What is already loaded stays loaded until Load is clicked. */
+function pickSet(id) {
+  hubSet = WEIGHT_SETS[id];
+  for (const b of el.setSeg.children) {
+    const on = b.dataset.set === id;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  }
+  el.setNote.textContent = hubSet.note;
+  renderHubFiles();
+  updateEstimate();
+  updateCode();
+}
+
+/**
+ * Read which weight files are in the browser cache and show it. Reads the
+ * cache directly (see CACHE_NAME) so no request leaves the page.
+ */
+async function refreshCacheInfo() {
+  try {
+    if (typeof caches === "undefined") throw new Error("no Cache API");
+    // `has` first: `open` would create an empty cache as a side effect.
+    const keys = (await caches.has(CACHE_NAME))
+      ? await (await caches.open(CACHE_NAME)).keys()
+      : [];
+    cachedFiles = new Set(
+      keys.map((req) => decodeURIComponent(new URL(req.url).pathname.split("/").pop())),
+    );
+  } catch {
+    cachedFiles = null;
+  }
+  renderCacheInfo();
+  if (!session.loading) renderHubFiles();
+}
+
+function renderCacheInfo() {
+  if (cachedFiles === null) {
+    el.cacheInfo.innerHTML =
+      '<span class="warn">This browser offers no cache here, so the weights are downloaded on every load.</span>';
+    el.cacheClear.hidden = true;
+    return;
+  }
+  const known = Object.values(WEIGHT_SETS).flatMap((set) => KINDS.map((k) => set[k]));
+  const cached = known.filter((f) => cachedFiles.has(f.file));
+  const bytes = cached.reduce((sum, f) => sum + f.bytes, 0);
+  el.cacheInfo.textContent = cached.length
+    ? `Cached in this browser: ${cached.length} file${cached.length > 1 ? "s" : ""}, ${mb(bytes)} MB.`
+    : "Nothing cached in this browser yet.";
+  el.cacheClear.hidden = !cachedFiles.size;
+}
+
+async function clearCache() {
+  el.cacheClear.disabled = true;
+  try {
+    await session.clearCache();
+    setStatus(
+      session.ready && session.source === "hub"
+        ? "Cached weights deleted — the loaded weights stay usable until you reload the page."
+        : "Cached weights deleted.",
+      "ok",
+    );
+  } catch (err) {
+    setStatus(`Could not clear the cache: ${err.message}`, "err");
+  } finally {
+    // A load may have started meanwhile and locked the button.
+    el.cacheClear.disabled = session.loading;
+    await refreshCacheInfo();
+  }
+}
+
+/** One row per file of the selected set: name, size, progress bar. */
+function renderHubFiles() {
+  el.hubFiles.innerHTML = "";
+  for (const kind of KINDS) {
+    const { file, bytes } = hubSet[kind];
+    const row = document.createElement("div");
+    row.className = "dl";
+    row.dataset.file = file;
+    row.innerHTML = `
+      <div class="dl-hd">
+        <span class="dl-name">${file}</span>
+        <span class="dl-state">${mb(bytes)} MB${cachedFiles?.has(file) ? " · cached" : ""}</span>
+      </div>
+      <div class="dl-bar"><div></div></div>`;
+    el.hubFiles.appendChild(row);
+  }
+  el.hubLoad.textContent = `Load ${hubSet.name} weights · ${mb(setBytes(hubSet))} MB`;
+}
+
+function hubRow(file) {
+  return [...el.hubFiles.children].find((r) => r.dataset.file === file);
+}
+
+function setRow(file, fraction, text, done = false) {
+  const row = hubRow(file);
+  if (!row) return;
+  row.querySelector(".dl-bar > div").style.width = `${Math.round(fraction * 100)}%`;
+  row.querySelector(".dl-state").textContent = text;
+  row.classList.toggle("done", done);
+}
+
+function setLoading(on) {
+  el.hubLoad.disabled = on;
+  el.srcLocalBtn.disabled = on;
+  el.srcHubBtn.disabled = on;
+  el.cacheClear.disabled = on;
+  for (const b of el.setSeg.children) b.disabled = on;
+}
+
+async function loadHub() {
+  // The session refuses a load during a run; without this the controls would
+  // stay locked with nothing left to unlock them.
+  if (running) {
+    setStatus("Wait for the current run to finish, then load the weights.");
+    return;
+  }
+  resetDrops();
+  localEgnnBytes = null;
+  renderHubFiles();
+  setLoading(true);
+  // Start the load first: only then does the session count as loading, so
+  // Generate and Random stay disabled for the whole load.
+  const pending = session.loadFromHub(hubSet.id);
+  refreshReady();
+  setStatus(`Loading ${hubSet.name} weights — from the browser cache if they are there…`);
+  // Outcome and errors are reported through onHubEvent.
+  await pending.catch(() => {});
+}
+
+/**
+ * Hub events from the session, for a load the user started or for the
+ * automatic reload after an abort restarted the worker.
+ */
+function onHubEvent(evt) {
+  if (evt.type === "progress") {
+    const { file, loaded, total } = evt;
+    const of = total ? ` / ${mb(total)} MB` : " MB";
+    setRow(file, total ? loaded / total : 0, `${mb(loaded)}${of}`);
+    if (!running) setStatus(`Downloading ${file} from Hugging Face…`);
+    return;
+  }
+
+  setLoading(false);
+
+  if (evt.type === "loaded") {
+    const what = evt.restored ? "Weights reloaded into a fresh worker" : `${WEIGHT_SETS[evt.set].name} weights loaded`;
+    const fromCache = evt.files.every((f) => f.cached);
+    const how = fromCache ? "from the browser cache" : "downloaded from Hugging Face";
+    refreshReady();
+    setStatus(`${what} (${how}) — ready to generate.`, "ok");
+    showLoaded(evt);
+    updateEstimate();
+    updateCode();
+    return;
+  }
+
+  // load-error
+  renderHubFiles();
+  refreshCacheInfo();
+  refreshReady();
+  // The package's message ends in the browser's own fetch error, which says
+  // nothing about what to do.
+  const offline = /Failed to fetch|NetworkError|Load failed/.test(evt.message);
+  setStatus(`Could not load the weights: ${evt.message}${offline ? " — check your connection" : ""}`, "err");
+}
+
+/**
+ * Mark the loaded files, then check they really made it into the cache: the
+ * package only warns in the console when the browser refuses to store a file
+ * (quota, private mode, low disk), and the next visit would download it again.
+ */
+async function showLoaded(evt) {
+  await refreshCacheInfo();
+  // The user may have picked the other set meanwhile; rows show that one.
+  if (evt.set !== hubSet.id) return;
+  for (const f of evt.files) {
+    setRow(f.file, 1, `${mb(f.bytes)} MB · ${f.cached ? "from cache" : "downloaded"}`, true);
+  }
+  if (cachedFiles === null) return;
+  const missing = evt.files.filter((f) => !cachedFiles.has(f.file));
+  if (missing.length) {
+    el.cacheInfo.innerHTML =
+      `<span class="warn">The browser did not keep ${missing.map((f) => f.file).join(" and ")} ` +
+      "in its cache, so it will be downloaded again next time.</span>";
+  }
+}
+
 function wireDrop(kind, dropId, inputId, fileId, expectHint) {
   const drop = $(dropId);
   const input = $(inputId);
@@ -215,14 +509,33 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
       setStatus(`"${file.name}" is not an .onnx file.`, "err");
       return;
     }
+    if (session.loading) {
+      setStatus("Wait for the Hugging Face download to finish.", "err");
+      return;
+    }
     label.textContent = `${file.name} · loading…`;
     try {
       const bytes = await readWeights(file);
+      // The read can outlast a Load click (or an Abort that restarts the
+      // worker): a hub load that began meanwhile must not be replaced.
+      if (session.loading) {
+        label.textContent = expectHint;
+        setStatus("Wait for the Hugging Face download to finish.", "err");
+        return;
+      }
+      if (session.source !== "local") renderHubFiles();
       session.setWeights(kind, bytes);
-      const mb = (bytes.byteLength / 1024 / 1024).toFixed(0);
-      label.textContent = `${file.name} · ${mb} MB`;
+      if (kind === "egnn") localEgnnBytes = bytes.byteLength;
+      updateEstimate();
+      updateCode();
+      label.textContent = `${file.name} · ${mb(bytes.byteLength)} MB`;
       drop.classList.add("loaded");
-      refreshReady();
+      // During a run the status line belongs to the run, and the buttons are
+      // re-derived when it ends.
+      if (!running) {
+        refreshReady();
+        if (session.ready) setStatus("Local weights loaded — ready to generate.", "ok");
+      }
     } catch (err) {
       label.textContent = expectHint;
       setStatus(`Could not read ${file.name}: ${err.message}`, "err");
@@ -236,7 +549,12 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
       input.click();
     }
   });
-  input.addEventListener("change", () => accept(input.files[0]));
+  input.addEventListener("change", () => {
+    accept(input.files[0]);
+    // Let the same file be picked again: the input fires no change event for
+    // a selection it already holds.
+    input.value = "";
+  });
 
   drop.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -250,14 +568,27 @@ function wireDrop(kind, dropId, inputId, fileId, expectHint) {
   });
 }
 
+/**
+ * Enable Generate when a complete pair is loaded. Only the waiting message is
+ * set here; loads report their own outcome.
+ */
 function refreshReady() {
-  if (session.ready) {
-    el.run.disabled = false;
-    setStatus("Weights loaded — ready to generate.", "ok");
-  } else {
-    el.run.disabled = true;
+  el.run.disabled = running || !session.ready;
+  el.random.disabled = el.run.disabled;
+  if (session.ready || session.loading) return;
+  if (session.source === "local") {
     const need = !session.loaded.egnn ? "EGNN" : "AdjMatSeer";
-    setStatus(`Waiting for ${need} weights…`);
+    setStatus(`Waiting for the ${need} file…`);
+  } else {
+    setStatus("Load the model weights above to start.");
+  }
+}
+
+/** Clear the local drop zones — they no longer describe what is loaded. */
+function resetDrops() {
+  for (const kind of KINDS) {
+    $(`drop-${kind}`).classList.remove("loaded");
+    $(`file-${kind}`).textContent = `e.g. ${WEIGHT_SETS[DEFAULT_SET][kind].file}`;
   }
 }
 
@@ -282,7 +613,9 @@ function makeCard(index, mol, { label } = {}) {
       <button class="mini" data-act="dl">Download</button>
     </div>`;
 
-  const block = mol.molBlock;
+  // Animate feeds later frames into the same card (see update below), so Copy
+  // and Download read the current molecule, not the one the card started with.
+  let block = mol.molBlock;
   const viewer = pool.create(card.querySelector(".viewer"), { spin: true });
   viewer.setMolecule(block);
 
@@ -300,7 +633,14 @@ function makeCard(index, mol, { label } = {}) {
     URL.revokeObjectURL(url);
   });
 
-  return { card, viewer };
+  /** Show a later frame of the same molecule in place, keeping the camera. */
+  const update = (next) => {
+    block = next.molBlock;
+    viewer.updateMolecule(block);
+    card.querySelector(".card-meta").textContent = `${next.nAtoms} atoms · ${next.nBonds} bonds`;
+  };
+
+  return { card, viewer, update };
 }
 
 function showStats(entries) {
@@ -329,18 +669,25 @@ function resetOutput() {
 
 /* ── Run ─────────────────────────────────────────────────────────────── */
 
-async function run() {
+/** @param {"config"|"random"} what — the Generate button runs the selected mode */
+async function run(what = "config") {
   if (running) return;
+  const c = config();
+  runKind = what === "random" ? "random" : c.mode;
+  if (runKind !== "random" && lastRandomSeed !== null) {
+    lastRandomSeed = null;
+    updateCode();
+  }
   running = true;
   el.run.disabled = true;
-  el.run.textContent = "Working…";
+  el.random.disabled = true;
+  (runKind === "random" ? el.random : el.run).textContent = "Working…";
   el.stop.hidden = false;
   resetOutput();
 
-  const c = config();
-
   try {
-    if (c.mode === "animate") await runAnimate(c);
+    if (runKind === "animate") await runAnimate(c);
+    else if (runKind === "random") await runGenerate(c, { random: true });
     else await runGenerate(c);
   } catch (err) {
     console.error(err);
@@ -353,19 +700,43 @@ async function run() {
     el.empty.innerHTML = `Generation failed. Check the browser console for details.`;
   } finally {
     running = false;
-    el.run.disabled = false;
+    runKind = null;
+    // After an abort the worker may still be reloading weights.
+    el.run.disabled = !session.ready;
+    el.random.disabled = el.run.disabled;
     el.run.textContent = "Generate";
+    el.random.textContent = "Random shape";
     el.stop.hidden = true;
     el.progress.hidden = true;
   }
 }
 
-async function runGenerate(c) {
+async function runGenerate(c, { random = false } = {}) {
   setProgress(0, 1, "Initialising…");
-  const result = await session.generate(c, (m) => setStatus(m));
+  let result;
+  if (random) {
+    // A fresh shape on every click; logged with the run so it can be repeated.
+    const contextSeed = crypto.getRandomValues(new Uint32Array(1))[0];
+    result = await session.random({ ...c, contextSeed }, (m) => setStatus(m));
+    result.contextSeed = contextSeed;
+    if (!result.aborted) {
+      lastRandomSeed = contextSeed;
+      updateCode();
+    }
+  } else {
+    result = await session.generate(c, (m) => setStatus(m));
+  }
 
   if (result.aborted) {
-    setStatus("Aborted — the worker was restarted.", "err");
+    // The new worker is reloading the hub set; keep the load controls locked
+    // until it reports back (onHubEvent unlocks them).
+    if (session.loading) setLoading(true);
+    setStatus(
+      session.loading
+        ? "Aborted — the worker was restarted; reloading the weights…"
+        : "Aborted — the worker was restarted.",
+      "err",
+    );
     el.empty.hidden = false;
     el.empty.textContent = "Run aborted.";
     return;
@@ -373,11 +744,14 @@ async function runGenerate(c) {
 
   const { molecules, requested, elapsedMs } = result;
 
+  const shape = random ? ` for random shape #${result.contextSeed}` : "";
+
   if (!molecules.length) {
     el.empty.hidden = false;
     el.empty.innerHTML =
       "No valid molecules survived standardization. Try more diffusion steps, or a different shape.";
-    setStatus("0 valid molecules — try adjusting the settings.", "err");
+    const hint = random ? "try another random shape" : "try adjusting the settings";
+    setStatus(`0 valid molecules${shape} — ${hint}.`, "err");
     return;
   }
 
@@ -401,7 +775,7 @@ async function runGenerate(c) {
   ]);
 
   setStatus(
-    `${molecules.length}/${requested} valid in ${(elapsedMs / 1000).toFixed(1)}s.`,
+    `${molecules.length}/${requested} valid${shape} in ${(elapsedMs / 1000).toFixed(1)}s.`,
     "ok",
   );
 }
@@ -439,9 +813,7 @@ async function runAnimate(c) {
         el.grid.appendChild(made.card);
         made.viewer.resize();
       } else {
-        cards[i].viewer.updateMolecule(mol.molBlock);
-        cards[i].card.querySelector(".card-meta").textContent =
-          `${mol.nAtoms} atoms · ${mol.nBonds} bonds`;
+        cards[i].update(mol);
       }
     });
   };
@@ -522,19 +894,34 @@ function init() {
   }
   $("c-seed").addEventListener("input", updateCode);
   $("c-mode").addEventListener("change", () => {
+    lastRandomSeed = null;
     updateCode();
     updateEstimate();
     el.run.textContent = "Generate";
   });
 
-  wireDrop("egnn", "drop-egnn", "input-egnn", "file-egnn", "egnn_chembl_15_39.onnx");
-  wireDrop("adj", "drop-adj", "input-adj", "file-adj", "adj_mat_seer_chembl_15_39.onnx");
+  renderSets();
+  refreshCacheInfo();
+  el.cacheClear.addEventListener("click", clearCache);
+  el.srcHubBtn.addEventListener("click", () => showSource("hub"));
+  el.srcLocalBtn.addEventListener("click", () => showSource("local"));
+  el.hubLoad.addEventListener("click", () => {
+    // The reload after an abort may already be under way.
+    if (session.loading) return;
+    loadHub();
+  });
+  for (const kind of KINDS) {
+    const hint = `e.g. ${WEIGHT_SETS[DEFAULT_SET][kind].file}`;
+    wireDrop(kind, `drop-${kind}`, `input-${kind}`, `file-${kind}`, hint);
+  }
 
-  el.run.addEventListener("click", run);
+  el.run.addEventListener("click", () => run());
+  el.random.addEventListener("click", () => run("random"));
   el.stop.addEventListener("click", () => {
-    // Animate stops at the next step boundary; generate can only be stopped by
-    // restarting the worker, which throws away the compiled graphs.
-    const cooperative = config().mode === "animate";
+    if (!running) return;
+    // Animate stops at the next step boundary; generate and random can only be
+    // stopped by restarting the worker, which throws away the compiled graphs.
+    const cooperative = runKind === "animate";
     setStatus(
       cooperative ? "Stopping after this step…" : "Restarting worker to stop…",
     );
