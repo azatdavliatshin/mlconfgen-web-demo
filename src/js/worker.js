@@ -284,6 +284,7 @@ async function runAnimate(config) {
   status("Streaming denoising trajectory…");
   const started = performance.now();
   let total = config.diffusionSteps;
+  let lastStep = 0;
   let last = [];
 
   // The whole batch is denoised together, so every sample has a trajectory —
@@ -297,20 +298,24 @@ async function runAnimate(config) {
     filterInvalid: false,
   })) {
     if (aborted) break;
-    if (!frame.molecules.length) continue;
     total = frame.total;
-    last = frame.molecules;
-    post({
-      type: "frame",
-      step: frame.step,
-      total: frame.total,
-      molecules: frame.molecules.map(serialize),
-    });
+    // A frame without molecules is not shown, but still goes through the
+    // abort check below.
+    if (frame.molecules.length) {
+      lastStep = frame.step;
+      last = frame.molecules;
+      post({
+        type: "frame",
+        step: frame.step,
+        total: frame.total,
+        molecules: frame.molecules.map(serialize),
+      });
+    }
 
     // The generator moves from one step to the next without returning to the
     // event loop, so an "abort" message would wait for the whole trajectory.
-    // A zero-delay timer lets it in, and the check stops before the next step
-    // is computed rather than after it.
+    // A zero-delay timer lets it in after every frame, and the check stops
+    // before the next step is computed rather than after it.
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (aborted) break;
   }
@@ -318,7 +323,9 @@ async function runAnimate(config) {
   post({
     type: "done",
     animated: true,
-    aborted,
+    // An Abort that arrives while the last step is computed changes nothing:
+    // the trajectory is complete.
+    aborted: aborted && lastStep < total,
     total,
     molecules: last.map(serialize),
     elapsedMs: performance.now() - started,
