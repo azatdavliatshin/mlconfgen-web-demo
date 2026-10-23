@@ -421,6 +421,7 @@ async function loadHub() {
     setStatus("Wait for the current run to finish, then load the weights.", "err");
     return;
   }
+  resetDrops();
   renderHubFiles();
   setLoading(true);
   // Start the load first: only then does the session count as loading, so
@@ -889,7 +890,6 @@ function init() {
   el.hubLoad.addEventListener("click", () => {
     // The reload after an abort may already be under way.
     if (session.loading) return;
-    resetDrops();
     loadHub();
   });
   for (const kind of KINDS) {

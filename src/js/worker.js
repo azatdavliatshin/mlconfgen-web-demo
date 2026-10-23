@@ -211,13 +211,22 @@ async function ensureGenerator(diffusionSteps) {
   }
 
   status("Compiling ONNX graphs — first run takes a moment…");
-  generator = await createGenerator({
+  const version = weightsVersion;
+  const built = await createGenerator({
     ort,
     rdkitLoader: loadRdkit,
     egnnOnnx: weights.egnn,
     adjMatSeerOnnx: weights.adj,
     diffusionSteps,
   });
+  // The first compile in a worker waits for ORT's .wasm, and a local file can
+  // arrive meanwhile. This build then holds the old weights: use it for this
+  // run only and release it afterwards, so the next run builds from the new.
+  if (version !== weightsVersion) {
+    retired.push(built);
+    return built;
+  }
+  generator = built;
   builtWithSteps = diffusionSteps;
   return generator;
 }
