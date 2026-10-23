@@ -184,8 +184,8 @@ function updateEstimate() {
 }
 
 /**
- * The createGenerator call for the current weights: by name for a hub set,
- * as bytes for local files.
+ * The createGenerator call for the current weights: the package defaults for
+ * the Full set, by name for Distilled, as bytes for local files.
  */
 function snippetWeights(c) {
   if (session.source === "local") {
@@ -198,14 +198,19 @@ const gen = await createGenerator({
 });`;
   }
   const set = estimateSet();
-  return `// Downloaded from Hugging Face on first use, then loaded
-// from the browser cache. Inference runs on this machine.
+  if (set.id === "full") {
+    return `// Default weights: downloaded from Hugging Face on first use, then cached.
+// Pass onProgress({ file, loaded, total }) to show download progress.
+const gen = await createGenerator({ ort, diffusionSteps: ${c.diffusionSteps} });`;
+  }
+  return `// Bare file names are downloaded from Hugging Face and cached automatically.
+// Leave them out to get the default (Full) weights.
+// Pass onProgress({ file, loaded, total }) to show download progress.
 const gen = await createGenerator({
   ort,
   egnnOnnx: "${set.egnn.file}",
   adjMatSeerOnnx: "${set.adj.file}",
   diffusionSteps: ${c.diffusionSteps},
-  onProgress: ({ file, loaded, total }) => showProgress(file, loaded, total),
 });`;
 }
 
@@ -253,7 +258,7 @@ ${call}`;
 
 const KEYWORDS = /^(?:import|from|const|await|for|of|new|return)$/;
 const FUNCS =
-  /^(?:createGenerator|generateConformers|animateGeneration|random|seed|render|showProgress)$/;
+  /^(?:createGenerator|generateConformers|animateGeneration|random|seed|render)$/;
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
 const escape = (s) => s.replace(/[&<>]/g, (c) => ESC[c]);
